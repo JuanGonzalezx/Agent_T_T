@@ -1,0 +1,19 @@
+# Dependencias para el proyecto de envío de mensajes WhatsApp
+
+# Framework web para el webhook
+flask==3.0.0
+
+# Cliente HTTP para llamadas a la API
+requests==2.31.0
+
+# Manipulación de datos CSV
+pandas==2.1.4
+
+# Variables de entorno
+python-dotenv==1.0.0
+
+# Servidor WSGI para producción (opcional)
+gunicorn==21.2.0
+
+# Utilidades adicionales
+pytz==2023.3
