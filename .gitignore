@@ -1,6 +1,7 @@
 # Variables de entorno (contiene credenciales sensibles)
 .env
-.env.example
+# Mantener .env.example en backend/ para documentación
+!backend/.env.example
 
 # Archivos de backup del CSV
 bd_envio_backup_*.csv

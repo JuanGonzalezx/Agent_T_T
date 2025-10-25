@@ -1,13 +1,16 @@
 # Dependencias para el proyecto de envío de mensajes WhatsApp
 
-# Framework web para el webhook
+# Framework web para el backend/webhook
 flask==3.0.0
+
+# CORS para permitir peticiones cross-origin
+flask-cors==4.0.0
 
 # Cliente HTTP para llamadas a la API
 requests==2.31.0
 
 # Manipulación de datos CSV
-pandas==2.1.4
+pandas>=2.2.0
 
 # Variables de entorno
 python-dotenv==1.0.0
