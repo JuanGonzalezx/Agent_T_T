@@ -60,15 +60,23 @@ def health_check():
 @app.route('/api/messages/send-simple', methods=['POST'])
 def send_simple_message():
     """
-    Envía un mensaje simple a un número de teléfono.
+    Envía un mensaje simple o de plantilla a un número de teléfono.
     
-    Este endpoint permite enviar un mensaje de texto a un número específico
-    sin necesidad de usar el CSV, útil para pruebas o envíos individuales.
+    Este endpoint permite enviar tanto mensajes de texto como plantillas
+    pre-aprobadas, útil para pruebas o envíos individuales.
     
-    Request Body:
+    Request Body para mensaje de texto:
         {
             "phone": "+573001234567",
             "message": "Texto del mensaje"
+        }
+    
+    Request Body para plantilla:
+        {
+            "phone": "+573001234567",
+            "template_name": "prueba",
+            "parameters": ["talentoTech", "Inteligencia Artificial", "Presencial"],
+            "language_code": "es"  // Opcional, default: "es"
         }
     
     Returns:
@@ -78,7 +86,6 @@ def send_simple_message():
         data = request.get_json()
         
         # Validación de entrada
-        # Rechazar peticiones sin los campos requeridos previene errores
         if not data:
             return jsonify({
                 'success': False,
@@ -86,28 +93,65 @@ def send_simple_message():
             }), 400
         
         phone = data.get('phone')
-        message = data.get('message')
         
-        if not phone or not message:
+        if not phone:
             return jsonify({
                 'success': False,
-                'error': 'Campos requeridos: phone, message'
+                'error': 'Campo requerido: phone'
             }), 400
         
-        # Enviar mensaje
-        success, result = whatsapp_service.send_text_message(phone, message)
+        # Determinar si es un mensaje de plantilla o texto simple
+        template_name = data.get('template_name')
         
-        if success:
-            return jsonify({
-                'success': True,
-                'message_id': result,
-                'phone': phone
-            }), 200
+        if template_name:
+            # Envío de plantilla
+            parameters = data.get('parameters', [])
+            language_code = data.get('language_code', 'es')
+            
+            success, result = whatsapp_service.send_template_message(
+                phone, 
+                template_name, 
+                parameters, 
+                language_code
+            )
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message_id': result,
+                    'phone': phone,
+                    'type': 'template',
+                    'template_name': template_name
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': result
+                }), 500
         else:
-            return jsonify({
-                'success': False,
-                'error': result
-            }), 500
+            # Envío de mensaje de texto simple
+            message = data.get('message')
+            
+            if not message:
+                return jsonify({
+                    'success': False,
+                    'error': 'Campo requerido: message (o template_name para plantillas)'
+                }), 400
+            
+            success, result = whatsapp_service.send_text_message(phone, message)
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message_id': result,
+                    'phone': phone,
+                    'type': 'text'
+                }), 200
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': result
+                }), 500
     
     except Exception as e:
         # Logging centralizado de errores para debugging

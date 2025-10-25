@@ -83,6 +83,53 @@ class WhatsAppService:
         }
         return json.dumps(payload)
     
+    def _build_template_message_payload(self, recipient: str, template_name: str, language_code: str, parameters: list) -> str:
+        """
+        Construye el payload JSON para un mensaje de plantilla (template).
+        
+        Las plantillas son mensajes pre-aprobados por Meta que pueden contener
+        variables dinámicas. Son necesarias para iniciar conversaciones.
+        
+        Args:
+            recipient: Número de teléfono en formato E.164
+            template_name: Nombre de la plantilla aprobada
+            language_code: Código de idioma (ej: "es", "en_US")
+            parameters: Lista de parámetros para las variables de la plantilla
+            
+        Returns:
+            str: JSON string con el payload
+        """
+        # Construir componentes de parámetros
+        components = []
+        
+        if parameters and len(parameters) > 0:
+            body_parameters = []
+            for param in parameters:
+                body_parameters.append({
+                    "type": "text",
+                    "text": str(param)
+                })
+            
+            components.append({
+                "type": "body",
+                "parameters": body_parameters
+            })
+        
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {
+                    "code": language_code
+                },
+                "components": components
+            }
+        }
+        return json.dumps(payload)
+    
     def _normalize_phone_number(self, phone: str) -> str:
         """
         Normaliza un número de teléfono al formato requerido por la API.
@@ -168,3 +215,78 @@ class WhatsAppService:
         
         except Exception as e:
             return False, f"Error inesperado: {str(e)}"
+    
+    def send_template_message(self, phone: str, template_name: str, parameters: list = None, language_code: str = "es") -> Tuple[bool, str]:
+        """
+        Envía un mensaje usando una plantilla pre-aprobada de WhatsApp.
+        
+        Las plantillas permiten enviar mensajes estructurados con variables
+        dinámicas. Son necesarias para iniciar conversaciones con usuarios.
+        
+        Args:
+            phone: Número de teléfono (se normalizará automáticamente)
+            template_name: Nombre de la plantilla aprobada en Meta
+            parameters: Lista de valores para las variables de la plantilla
+            language_code: Código de idioma de la plantilla (default: "es")
+            
+        Returns:
+            Tuple[bool, str]: (éxito, message_id o mensaje_error)
+        """
+        # Validar credenciales antes de intentar enviar
+        valid, msg = self.validate_credentials()
+        if not valid:
+            return False, msg
+        
+        # Normalizar el número de teléfono
+        normalized_phone = self._normalize_phone_number(phone)
+        
+        # Construir el payload del mensaje de plantilla
+        payload = self._build_template_message_payload(
+            normalized_phone, 
+            template_name, 
+            language_code, 
+            parameters or []
+        )
+        
+        # Configurar headers de autenticación
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.access_token}"
+        }
+        
+        try:
+            # Timeout de 30s previene bloqueos indefinidos
+            response = requests.post(
+                self.base_url,
+                data=payload,
+                headers=headers,
+                timeout=30
+            )
+            
+            # Procesar respuesta exitosa
+            if response.status_code == 200:
+                response_data = response.json()
+                
+                # Extraer el ID del mensaje
+                if 'messages' in response_data and len(response_data['messages']) > 0:
+                    message_id = response_data['messages'][0].get('id', '')
+                    return True, message_id
+                else:
+                    return False, f"Respuesta inesperada: {response_data}"
+            
+            # Manejar errores de la API
+            else:
+                error_data = response.json() if response.text else {}
+                error_msg = error_data.get('error', {}).get('message', response.text)
+                return False, f"Error {response.status_code}: {error_msg}"
+        
+        # Manejo de excepciones de red
+        except requests.exceptions.Timeout:
+            return False, "Timeout: La API no respondió a tiempo"
+        
+        except requests.exceptions.ConnectionError:
+            return False, "Error de conexión: Verifica la conectividad a internet"
+        
+        except Exception as e:
+            return False, f"Error inesperado: {str(e)}"
+
