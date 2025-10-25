@@ -106,27 +106,3 @@ Crea el archivo `.env` y completa las credenciales.
 
 ---
 
-## 📚 Más información
-
-Lee el **README.md** completo para:
-- Configuración detallada de WhatsApp Business API
-- Explicación de cada paso
-- Preguntas frecuentes
-- Solución de problemas avanzada
-
----
-
-## 📁 Archivos importantes
-
-| Archivo | Descripción |
-|---------|-------------|
-| `send_messages.py` | Script de envío (ejecutar una vez) |
-| `webhook.py` | Servidor receptor (mantener corriendo) |
-| `verify_setup.py` | Verificador de configuración |
-| `bd_envio.csv` | Base de datos de contactos |
-| `.env` | Credenciales (NUNCA subir a Git) |
-| `README.md` | Documentación completa |
-
----
-
-¡Listo para enviar! 🎉

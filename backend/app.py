@@ -317,6 +317,114 @@ def get_pending_contacts():
         }), 500
 
 
+@app.route('/webhook', methods=['GET', 'POST'])
+def webhook():
+    """
+    Webhook para recibir notificaciones de WhatsApp.
+    
+    Este endpoint maneja dos tipos de peticiones:
+    1. GET: Verificación del webhook por parte de Meta (una sola vez)
+    2. POST: Recepción de eventos (mensajes, respuestas, etc.)
+    
+    El webhook captura las respuestas de los usuarios y las registra en el CSV,
+    permitiendo trazabilidad completa de las conversaciones.
+    
+    Returns:
+        - GET: Challenge token para verificación
+        - POST: Status 200 para confirmar recepción
+    """
+    if request.method == 'GET':
+        # Verificación del webhook por parte de Meta
+        # Esto solo ocurre una vez durante la configuración inicial
+        verify_token = os.getenv('VERIFY_TOKEN', 'mi_token_secreto')
+        mode = request.args.get('hub.mode')
+        token = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
+        
+        if mode == 'subscribe' and token == verify_token:
+            app.logger.info('Webhook verificado exitosamente')
+            return challenge, 200
+        else:
+            app.logger.warning('Fallo en la verificación del webhook')
+            return 'Forbidden', 403
+    
+    elif request.method == 'POST':
+        # Recepción de eventos de WhatsApp
+        try:
+            body = request.get_json()
+            
+            # Log del evento recibido para debugging
+            app.logger.info(f"Webhook recibido: {body}")
+            
+            # Verificar que el evento tenga la estructura esperada
+            # WhatsApp envía eventos en este formato específico
+            if not body or 'entry' not in body:
+                return jsonify({'status': 'ok'}), 200
+            
+            # Procesar cada entrada (normalmente es una sola)
+            for entry in body.get('entry', []):
+                for change in entry.get('changes', []):
+                    value = change.get('value', {})
+                    
+                    # Verificar si hay mensajes en el evento
+                    messages = value.get('messages', [])
+                    if not messages:
+                        continue
+                    
+                    # Procesar cada mensaje
+                    for message in messages:
+                        # Extraer información del remitente
+                        from_number = message.get('from', '')
+                        message_type = message.get('type', '')
+                        
+                        response_text = None
+                        button_id = None
+                        
+                        # Manejar diferentes tipos de respuesta
+                        # Los botones interactivos envían un tipo especial
+                        if message_type == 'interactive':
+                            interactive = message.get('interactive', {})
+                            button_reply = interactive.get('button_reply', {})
+                            button_id = button_reply.get('id', '')
+                            response_text = button_reply.get('title', '')
+                        
+                        # Manejar respuestas de texto plano
+                        elif message_type == 'text':
+                            response_text = message.get('text', {}).get('body', '')
+                        
+                        # Si tenemos una respuesta, procesarla
+                        if response_text and from_number:
+                            # Cargar CSV
+                            success, df, msg = csv_handler.load_csv()
+                            if not success:
+                                app.logger.error(f"Error cargando CSV: {msg}")
+                                continue
+                            
+                            # Actualizar respuesta en el CSV
+                            success, df, msg = csv_handler.update_response(
+                                df,
+                                from_number,
+                                response_text,
+                                button_id
+                            )
+                            
+                            if success:
+                                # Guardar cambios
+                                csv_handler.save_csv(df)
+                                app.logger.info(f"✅ {msg} - Respuesta: '{response_text}'")
+                            else:
+                                app.logger.warning(f"⚠️ {msg}")
+            
+            # Siempre retornar 200 para confirmar recepción
+            # Esto evita que WhatsApp reintente enviar el evento
+            return jsonify({'status': 'ok'}), 200
+        
+        except Exception as e:
+            app.logger.error(f"Error procesando webhook: {str(e)}")
+            # Aún así retornar 200 para evitar reintentos
+            return jsonify({'status': 'ok'}), 200
+
+
 @app.errorhandler(404)
 def not_found(error):
     """

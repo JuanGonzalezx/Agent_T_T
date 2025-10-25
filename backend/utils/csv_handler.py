@@ -212,3 +212,68 @@ class CSVHandler:
             'errors': errors,
             'pending': pending
         }
+    
+    def find_contact_by_phone(self, df: pd.DataFrame, phone: str) -> Optional[int]:
+        """
+        Busca un contacto por número de teléfono.
+        
+        Args:
+            df: DataFrame con los contactos
+            phone: Número de teléfono a buscar (normalizado o con +)
+            
+        Returns:
+            Optional[int]: Índice del contacto encontrado o None
+        """
+        # Normalizar el teléfono de búsqueda
+        phone_normalized = phone.strip().replace('+', '').replace(' ', '').replace('-', '')
+        
+        # Buscar en el DataFrame
+        for idx, row in df.iterrows():
+            phone_in_csv = str(row.get('telefono_e164', '')).strip().replace('+', '').replace(' ', '').replace('-', '')
+            if phone_in_csv == phone_normalized:
+                return idx
+        
+        return None
+    
+    def update_response(
+        self,
+        df: pd.DataFrame,
+        phone: str,
+        response_text: str,
+        button_id: str = None
+    ) -> Tuple[bool, pd.DataFrame, str]:
+        """
+        Actualiza la respuesta del usuario en el CSV.
+        
+        Este método registra cuando un usuario responde a un mensaje,
+        permitiendo trazabilidad completa de la interacción.
+        
+        Args:
+            df: DataFrame a actualizar
+            phone: Número de teléfono del usuario
+            response_text: Texto de la respuesta
+            button_id: ID del botón presionado (si aplica)
+            
+        Returns:
+            Tuple[bool, pd.DataFrame, str]: (éxito, dataframe_actualizado, mensaje)
+        """
+        # Crear columnas de respuesta si no existen
+        # Esto permite trabajar con CSVs que no tienen estas columnas
+        response_columns = ['respuesta', 'fecha_respuesta', 'respuesta_id']
+        for col in response_columns:
+            if col not in df.columns:
+                df[col] = ''
+        
+        # Buscar el contacto por teléfono
+        idx = self.find_contact_by_phone(df, phone)
+        
+        if idx is None:
+            return False, df, f"Contacto no encontrado: {phone}"
+        
+        # Actualizar la respuesta
+        df.at[idx, 'respuesta'] = response_text
+        df.at[idx, 'fecha_respuesta'] = datetime.now().isoformat()
+        if button_id:
+            df.at[idx, 'respuesta_id'] = button_id
+        
+        return True, df, f"Respuesta registrada para {df.at[idx, 'nombre']}"
