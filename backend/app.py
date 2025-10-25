@@ -394,26 +394,93 @@ def webhook():
                         
                         # Si tenemos una respuesta, procesarla
                         if response_text and from_number:
-                            # Cargar CSV
-                            success, df, msg = csv_handler.load_csv()
-                            if not success:
-                                app.logger.error(f"Error cargando CSV: {msg}")
-                                continue
+                            # Normalizar la respuesta para comparación
+                            # Esto permite detectar "SI", "si", "Si", "sí", "SÍ", etc.
+                            response_normalized = response_text.strip().lower()
                             
-                            # Actualizar respuesta en el CSV
-                            success, df, msg = csv_handler.update_response(
-                                df,
-                                from_number,
-                                response_text,
-                                button_id
+                            # Variantes válidas de "Sí" y "No"
+                            # Incluye con y sin tilde, diferentes capitalizaciones
+                            valid_yes = ['si', 'sí', 'yes', 'y']
+                            valid_no = ['no', 'n']
+                            
+                            # Verificar si la respuesta es válida
+                            is_valid_response = (
+                                response_normalized in valid_yes or 
+                                response_normalized in valid_no
                             )
                             
-                            if success:
-                                # Guardar cambios
-                                csv_handler.save_csv(df)
-                                app.logger.info(f"✅ {msg} - Respuesta: '{response_text}'")
+                            if is_valid_response:
+                                # Cargar CSV
+                                success, df, msg = csv_handler.load_csv()
+                                if not success:
+                                    app.logger.error(f"Error cargando CSV: {msg}")
+                                    continue
+                                
+                                # Determinar la respuesta normalizada para guardar
+                                # Esto estandariza el formato en el CSV
+                                if response_normalized in valid_yes:
+                                    standardized_response = "Sí"
+                                else:
+                                    standardized_response = "No"
+                                
+                                # Actualizar respuesta en el CSV
+                                success, df, msg = csv_handler.update_response(
+                                    df,
+                                    from_number,
+                                    standardized_response,
+                                    button_id
+                                )
+                                
+                                if success:
+                                    # Guardar cambios
+                                    csv_handler.save_csv(df)
+                                    app.logger.info(f"✅ {msg} - Respuesta: '{standardized_response}'")
+                                    
+                                    # Enviar mensaje de agradecimiento
+                                    # Esto mejora la experiencia del usuario y confirma la recepción
+                                    thank_you_message = (
+                                        "¡Muchas gracias por tu respuesta! 🙏\n\n"
+                                        "Hemos registrado tu confirmación correctamente. "
+                                        "Si tienes alguna pregunta adicional, no dudes en contactarnos. "
+                                        "¡Que tengas un excelente día! "
+                                    )
+                                    
+                                    # Enviar mensaje de agradecimiento de forma asíncrona
+                                    # No bloqueamos el webhook si este envío falla
+                                    try:
+                                        whatsapp_service.send_text_message(
+                                            from_number,
+                                            thank_you_message
+                                        )
+                                        app.logger.info(f"📨 Mensaje de agradecimiento enviado a {from_number}")
+                                    except Exception as e:
+                                        app.logger.error(f"Error enviando agradecimiento: {str(e)}")
+                                else:
+                                    app.logger.warning(f"⚠️ {msg}")
                             else:
-                                app.logger.warning(f"⚠️ {msg}")
+                                # Respuesta no válida - no actualizar CSV
+                                # Esto evita contaminar los datos con respuestas irrelevantes
+                                app.logger.info(
+                                    f"ℹ️ Respuesta no válida recibida de {from_number}: '{response_text}'"
+                                )
+                                
+                                # Enviar mensaje indicando que solo se aceptan "Sí" o "No"
+                                invalid_response_message = (
+                                    "⚠️ Solo se aceptan respuestas de *Sí* o *No*.\n\n"
+                                    "Por favor, responde con:\n"
+                                    "• *Sí* (o Si, yes, y)\n"
+                                    "• *No* (o no, n)\n\n"
+                                    "Gracias por tu comprensión. "
+                                )
+                                
+                                try:
+                                    whatsapp_service.send_text_message(
+                                        from_number,
+                                        invalid_response_message
+                                    )
+                                    app.logger.info(f"📨 Mensaje de validación enviado a {from_number}")
+                                except Exception as e:
+                                    app.logger.error(f"Error enviando mensaje de validación: {str(e)}")
             
             # Siempre retornar 200 para confirmar recepción
             # Esto evita que WhatsApp reintente enviar el evento
