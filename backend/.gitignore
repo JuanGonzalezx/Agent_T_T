@@ -1,0 +1,56 @@
+# Variables de entorno (contiene credenciales sensibles)
+.env
+# Mantener .env.example en backend/ para documentación
+!backend/.env.example
+
+# Archivos de backup del CSV
+bd_envio_backup_*.csv
+
+# Entorno virtual de Python
+.venv/
+.venv311/
+venv/
+env/
+
+# Archivos de Python compilados
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribución / empaquetado
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Logs
+*.log
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos temporales de ngrok
+ngrok.log
