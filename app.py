@@ -75,11 +75,7 @@ def send_simple_message():
         {
             "phone": "+573001234567",
             "template_name": "prueba_matricula",
-            "parameters": {
-                "nombre": "Juan",
-                "bootcamp": "Inteligencia Artificial",
-                "modalidad": "Presencial"
-            },
+            "parameters": ["Juan", "Inteligencia Artificial", "Presencial", "24 de enero", "25 de enero", "26 de enero", "Lunes a viernes 6pm-10pm", "Moodle"],
             "language_code": "es"  // Opcional, default: "es"
         }
     
@@ -109,7 +105,7 @@ def send_simple_message():
         
         if template_name:
             # Envío de plantilla
-            parameters = data.get('parameters', {})
+            parameters = data.get('parameters', [])
             language_code = data.get('language_code', 'es')
             
             success, result = whatsapp_service.send_template_message(
@@ -234,17 +230,19 @@ def send_batch_messages():
             name = contact_info['nombre']
             
             # Extraer parámetros de la plantilla desde el CSV
-            # Los parámetros se envían como diccionario con nombres de variables
-            parameters = {
-                "nombre": str(row.get('nombre', '')),
-                "bootcamp": str(row.get('bootcamp', '')),
-                "modalidad": str(row.get('modalidad', '')),
-                "ingles_inicio": str(row.get('ingles_inicio', '')),
-                "ingles_fin": str(row.get('ingles_fin', '')),
-                "inicio_formacion": str(row.get('inicio_formacion', '')),
-                "horario": str(row.get('horario', '')),
-                "lugar": str(row.get('lugar', ''))
-            }
+            # IMPORTANTE: El orden DEBE coincidir con el orden de aparición en la plantilla
+            # {{nombre}}, {{bootcamp}}, {{modalidad}}, {{ingles_inicio}}, {{ingles_fin}}, 
+            # {{inicio_formacion}}, {{horario}}, {{lugar}}
+            parameters = [
+                str(row.get('nombre', '')),
+                str(row.get('bootcamp', '')),
+                str(row.get('modalidad', '')),
+                str(row.get('ingles_inicio', '')),
+                str(row.get('ingles_fin', '')),
+                str(row.get('inicio_formacion', '')),
+                str(row.get('horario', '')),
+                str(row.get('lugar', ''))
+            ]
             
             # Enviar mensaje usando plantilla
             success, result = whatsapp_service.send_template_message(
