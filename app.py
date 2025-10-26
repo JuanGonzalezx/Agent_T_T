@@ -168,11 +168,12 @@ def send_batch_messages():
     Envía mensajes masivos usando el CSV de contactos.
     
     Este endpoint procesa el CSV, filtra los contactos pendientes y
-    envía mensajes de forma controlada con delays para evitar rate limits.
+    envía mensajes usando plantillas de WhatsApp con los datos del CSV.
     
     Request Body:
         {
-            "message": "Texto del mensaje a enviar",
+            "template_name": "prueba_matricula",  // Nombre de la plantilla
+            "language_code": "es",  // Opcional, default: "es"
             "create_backup": true  // Opcional, default: true
         }
     
@@ -188,14 +189,9 @@ def send_batch_messages():
                 'error': 'No se recibió JSON en el body'
             }), 400
         
-        message = data.get('message')
+        template_name = data.get('template_name', 'prueba_matricula')
+        language_code = data.get('language_code', 'es')
         create_backup = data.get('create_backup', True)
-        
-        if not message:
-            return jsonify({
-                'success': False,
-                'error': 'Campo requerido: message'
-            }), 400
         
         # Cargar CSV
         success, df, msg = csv_handler.load_csv()
@@ -233,8 +229,26 @@ def send_batch_messages():
             phone = contact_info['telefono']
             name = contact_info['nombre']
             
-            # Enviar mensaje
-            success, result = whatsapp_service.send_text_message(phone, message)
+            # Extraer parámetros de la plantilla desde el CSV
+            # Los parámetros deben estar en el mismo orden que las variables de la plantilla
+            parameters = [
+                str(row.get('nombre', '')),                    # {{nombre}}
+                str(row.get('bootcamp', '')),                  # {{bootcamp}}
+                str(row.get('modalidad', '')),                 # {{modalidad}}
+                str(row.get('ingles_inicio', '')),             # {{ingles_inicio}}
+                str(row.get('ingles_fin', '')),                # {{ingles_fin}}
+                str(row.get('inicio_formacion', '')),          # {{inicio_formacion}}
+                str(row.get('horario', '')),                   # {{horario}}
+                str(row.get('lugar', ''))                      # {{lugar}}
+            ]
+            
+            # Enviar mensaje usando plantilla
+            success, result = whatsapp_service.send_template_message(
+                phone, 
+                template_name, 
+                parameters,
+                language_code
+            )
             
             # Actualizar estado en el DataFrame
             df = csv_handler.update_send_status(df, idx, success, result)
@@ -265,6 +279,8 @@ def send_batch_messages():
         return jsonify({
             'success': True,
             'message': 'Envío masivo completado',
+            'template_name': template_name,
+            'language_code': language_code,
             'stats': {
                 'sent': sent_count,
                 'errors': error_count,
