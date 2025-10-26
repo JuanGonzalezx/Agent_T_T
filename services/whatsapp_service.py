@@ -83,18 +83,19 @@ class WhatsAppService:
         }
         return json.dumps(payload)
     
-    def _build_template_message_payload(self, recipient: str, template_name: str, language_code: str, parameters: list) -> str:
+    def _build_template_message_payload(self, recipient: str, template_name: str, language_code: str, parameters: dict) -> str:
         """
         Construye el payload JSON para un mensaje de plantilla (template).
         
         Las plantillas son mensajes pre-aprobados por Meta que pueden contener
-        variables dinámicas. Son necesarias para iniciar conversaciones.
+        variables dinámicas con nombres. Son necesarias para iniciar conversaciones.
         
         Args:
             recipient: Número de teléfono en formato E.164
             template_name: Nombre de la plantilla aprobada
             language_code: Código de idioma (ej: "es", "en_US")
-            parameters: Lista de parámetros para las variables de la plantilla
+            parameters: Diccionario con los parámetros nombrados de la plantilla
+                       Ejemplo: {"nombre": "Juan", "bootcamp": "IA"}
             
         Returns:
             str: JSON string con el payload
@@ -104,10 +105,12 @@ class WhatsAppService:
         
         if parameters and len(parameters) > 0:
             body_parameters = []
-            for param in parameters:
+            # Para plantillas con variables nombradas, el orden no importa
+            # WhatsApp mapea automáticamente por nombre de variable
+            for param_name, param_value in parameters.items():
                 body_parameters.append({
                     "type": "text",
-                    "text": str(param)
+                    "text": str(param_value)
                 })
             
             components.append({
@@ -216,17 +219,18 @@ class WhatsAppService:
         except Exception as e:
             return False, f"Error inesperado: {str(e)}"
     
-    def send_template_message(self, phone: str, template_name: str, parameters: list = None, language_code: str = "es") -> Tuple[bool, str]:
+    def send_template_message(self, phone: str, template_name: str, parameters: dict = None, language_code: str = "es") -> Tuple[bool, str]:
         """
         Envía un mensaje usando una plantilla pre-aprobada de WhatsApp.
         
         Las plantillas permiten enviar mensajes estructurados con variables
-        dinámicas. Son necesarias para iniciar conversaciones con usuarios.
+        nombradas dinámicas. Son necesarias para iniciar conversaciones con usuarios.
         
         Args:
             phone: Número de teléfono (se normalizará automáticamente)
             template_name: Nombre de la plantilla aprobada en Meta
-            parameters: Lista de valores para las variables de la plantilla
+            parameters: Diccionario con los parámetros nombrados
+                       Ejemplo: {"nombre": "Juan", "bootcamp": "IA"}
             language_code: Código de idioma de la plantilla (default: "es")
             
         Returns:
@@ -245,7 +249,7 @@ class WhatsAppService:
             normalized_phone, 
             template_name, 
             language_code, 
-            parameters or []
+            parameters or {}
         )
         
         # Configurar headers de autenticación
