@@ -114,6 +114,32 @@ class WhatsAppService:
                 "parameters": body_parameters
             })
         
+        # Agregar componentes de botones si la plantilla los tiene
+        # Los botones de respuesta rápida (quick_reply) deben declararse aunque no tengan variables
+        components.append({
+            "type": "button",
+            "sub_type": "quick_reply",
+            "index": "0",
+            "parameters": [
+                {
+                    "type": "payload",
+                    "payload": "Si"
+                }
+            ]
+        })
+        
+        components.append({
+            "type": "button",
+            "sub_type": "quick_reply",
+            "index": "1",
+            "parameters": [
+                {
+                    "type": "payload",
+                    "payload": "No"
+                }
+            ]
+        })
+        
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
