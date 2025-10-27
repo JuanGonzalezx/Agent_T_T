@@ -127,7 +127,7 @@ class WhatsAppService:
                 "components": components
             }
         }
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps(payload)
     
     def _normalize_phone_number(self, phone: str) -> str:
         """
