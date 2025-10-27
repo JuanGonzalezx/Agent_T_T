@@ -8,6 +8,7 @@ y bien documentada para integraciones externas.
 
 import os
 import time
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from typing import Dict, Any
@@ -373,6 +374,104 @@ def get_pending_contacts():
     
     except Exception as e:
         app.logger.error(f"Error en get_pending_contacts: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/debug/template-payload', methods=['GET'])
+def debug_template_payload():
+    """
+    Endpoint de debug para ver el payload que se enviaría a WhatsApp.
+    
+    Muestra exactamente qué JSON se construiría para el primer contacto
+    pendiente, sin enviarlo realmente.
+    
+    Returns:
+        JSON: Payload que se enviaría a WhatsApp
+    """
+    try:
+        # Cargar CSV
+        success, df, msg = csv_handler.load_csv()
+        if not success:
+            return jsonify({
+                'success': False,
+                'error': msg
+            }), 400
+        
+        # Obtener primer contacto pendiente
+        pending_contacts = csv_handler.get_pending_contacts(df)
+        
+        if not pending_contacts:
+            return jsonify({
+                'success': False,
+                'error': 'No hay contactos pendientes'
+            }), 400
+        
+        # Tomar el primer contacto
+        idx, row = pending_contacts[0]
+        contact_info = csv_handler.get_contact_info(row)
+        phone = contact_info['telefono']
+        
+        # Extraer parámetros igual que en send_batch
+        parameters = [
+            str(row.get('nombre', '')),
+            str(row.get('bootcamp', '')),
+            str(row.get('modalidad', '')),
+            str(row.get('ingles_inicio', '')),
+            str(row.get('ingles_fin', '')),
+            str(row.get('inicio_formacion', '')),
+            str(row.get('horario', '')),
+            str(row.get('lugar', ''))
+        ]
+        
+        # Construir el payload (sin enviarlo)
+        normalized_phone = phone.strip().replace('+', '').replace(' ', '').replace('-', '')
+        
+        # Construir payload manualmente para mostrarlo
+        components = []
+        body_parameters = []
+        for param_value in parameters:
+            text_value = str(param_value).strip() if param_value else ""
+            body_parameters.append({
+                "type": "text",
+                "text": text_value
+            })
+        
+        components.append({
+            "type": "body",
+            "parameters": body_parameters
+        })
+        
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": normalized_phone,
+            "type": "template",
+            "template": {
+                "name": "prueba_matricula",
+                "language": {
+                    "code": "es"
+                },
+                "components": components
+            }
+        }
+        
+        return jsonify({
+            'success': True,
+            'contact': {
+                'nombre': contact_info['nombre'],
+                'phone': phone,
+                'phone_normalized': normalized_phone
+            },
+            'parameters': parameters,
+            'payload': payload,
+            'payload_json_string': json.dumps(payload, indent=2)
+        }), 200
+    
+    except Exception as e:
+        app.logger.error(f"Error en debug_template_payload: {str(e)}")
         return jsonify({
             'success': False,
             'error': f'Error interno: {str(e)}'
