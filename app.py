@@ -616,10 +616,10 @@ def _update_google_sheet(spreadsheet_id: str, access_token: str,
                          df: pd.DataFrame) -> Tuple[bool, str]:
     """
     Actualiza un Google Sheet con el DataFrame procesado.
-    Usa el método batchUpdate para garantizar que todas las columnas se escriban.
+    Obtiene dinámicamente el nombre de la primera hoja y actualiza todos los datos.
     
     Args:
-        spreadsheet_id: ID del spreadsheet
+        spreadsheet_id: ID del spreadsheet (mismo que file_id de Drive para Sheets)
         access_token: Token OAuth
         df: DataFrame con los datos actualizados
         
@@ -636,32 +636,45 @@ def _update_google_sheet(spreadsheet_id: str, access_token: str,
             'Content-Type': 'application/json'
         }
         
+        # Paso 0: Obtener el nombre de la primera hoja del spreadsheet
+        sheet_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
+        sheet_resp = requests.get(sheet_url, headers=headers, params={'fields': 'sheets.properties'}, timeout=20)
+        
+        if sheet_resp.status_code != 200:
+            app.logger.error(f"❌ Error obteniendo info del spreadsheet: {sheet_resp.status_code}")
+            return False, f"No se pudo acceder al spreadsheet: {sheet_resp.status_code}"
+        
+        sheet_info = sheet_resp.json()
+        sheets = sheet_info.get('sheets', [])
+        
+        if not sheets:
+            app.logger.error("❌ El spreadsheet no tiene hojas")
+            return False, "El spreadsheet no contiene hojas"
+        
+        # Obtener el nombre de la primera hoja
+        first_sheet_name = sheets[0].get('properties', {}).get('title', 'Sheet1')
+        app.logger.info(f"📄 Nombre de la primera hoja: '{first_sheet_name}'")
+        
         # Preparar datos: headers + valores
         headers_list = df.columns.tolist()
         values_list = [headers_list] + df.fillna('').values.tolist()
         
         app.logger.info(f"✍️ Preparando {len(values_list)} filas (incluyendo headers)")
         
-        # Paso 1: Limpiar TODO el contenido del Sheet
-        clear_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/Sheet1!A:ZZ"
-        clear_body = {}
+        # Paso 1: Limpiar TODO el contenido de la hoja usando el método clear correcto
+        clear_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{first_sheet_name}:clear"
         
-        clear_resp = requests.delete(
+        clear_resp = requests.post(
             clear_url,
             headers=headers,
+            json={},
             timeout=20
         )
         
-        # Si el clear falla, intentar con el método alternativo
-        if clear_resp.status_code != 200:
-            app.logger.warning(f"⚠️ Clear con DELETE falló: {clear_resp.status_code}, intentando con POST")
-            clear_url_alt = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/Sheet1!A1:ZZ:clear"
-            clear_resp = requests.post(clear_url_alt, headers=headers, timeout=20)
-        
         if clear_resp.status_code == 200:
-            app.logger.info("✅ Sheet limpiado completamente")
+            app.logger.info("✅ Hoja limpiada completamente")
         else:
-            app.logger.warning(f"⚠️ No se pudo limpiar el sheet: {clear_resp.status_code}")
+            app.logger.warning(f"⚠️ No se pudo limpiar la hoja: {clear_resp.status_code} - {clear_resp.text}")
         
         # Paso 2: Escribir TODOS los datos desde A1 usando batchUpdate
         batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values:batchUpdate"
@@ -669,7 +682,7 @@ def _update_google_sheet(spreadsheet_id: str, access_token: str,
         batch_body = {
             'valueInputOption': 'RAW',
             'data': [{
-                'range': 'Sheet1!A1',
+                'range': f'{first_sheet_name}!A1',
                 'values': values_list
             }]
         }
@@ -690,7 +703,8 @@ def _update_google_sheet(spreadsheet_id: str, access_token: str,
             app.logger.info(f"✅ Google Sheet actualizado exitosamente!")
             app.logger.info(f"   📊 {total_updated} filas x {total_cols} columnas")
             app.logger.info(f"   📋 Columnas escritas: {len(headers_list)}")
-            return True, f"Sheet actualizado: {total_updated} filas, {len(headers_list)} columnas"
+            app.logger.info(f"   📄 Hoja: '{first_sheet_name}'")
+            return True, f"Sheet '{first_sheet_name}' actualizado: {total_updated} filas, {len(headers_list)} columnas"
         else:
             error_text = batch_resp.text
             app.logger.error(f"❌ Error en batchUpdate: {batch_resp.status_code}")
