@@ -42,7 +42,7 @@ class CSVHandler:
             Tuple[bool, pd.DataFrame, str]: (éxito, dataframe, mensaje)
         """
         try:
-            df = pd.read_csv(self.csv_path, dtype=str)
+            df = pd.read_csv(self.csv_path, dtype=str, encoding='utf-8')
             
             # Validar que existan las columnas requeridas
             missing_cols = [col for col in self._required_columns if col not in df.columns]
@@ -73,7 +73,7 @@ class CSVHandler:
             Tuple[bool, str]: (éxito, mensaje)
         """
         try:
-            df.to_csv(self.csv_path, index=False)
+            df.to_csv(self.csv_path, index=False, encoding='utf-8')
             return True, "CSV guardado exitosamente"
         except Exception as e:
             return False, f"Error al guardar CSV: {str(e)}"
@@ -94,7 +94,7 @@ class CSVHandler:
         try:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_path = self.csv_path.replace('.csv', f'_backup_{timestamp}.csv')
-            df.to_csv(backup_path, index=False)
+            df.to_csv(backup_path, index=False, encoding='utf-8')
             return True, backup_path, f"Backup creado: {backup_path}"
         except Exception as e:
             return False, '', f"Error al crear backup: {str(e)}"

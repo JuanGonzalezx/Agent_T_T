@@ -8,6 +8,7 @@ y bien documentada para integraciones externas.
 
 import os
 import time
+import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from typing import Dict, Any, Tuple
@@ -77,8 +78,8 @@ def send_simple_message():
     Request Body para plantilla:
         {
             "phone": "+573001234567",
-            "template_name": "prueba",
-            "parameters": ["talentoTech", "Inteligencia Artificial", "Presencial"],
+            "template_name": "prueba_matricula",
+            "parameters": ["Juan", "Inteligencia Artificial", "Presencial", "24 de enero", "25 de enero", "26 de enero", "Lunes a viernes 6pm-10pm", "Moodle"],
             "language_code": "es"  // Opcional, default: "es"
         }
     
@@ -171,11 +172,12 @@ def send_batch_messages():
     Envía mensajes masivos usando el CSV de contactos.
     
     Este endpoint procesa el CSV, filtra los contactos pendientes y
-    envía mensajes de forma controlada con delays para evitar rate limits.
+    envía mensajes usando plantillas de WhatsApp con los datos del CSV.
     
     Request Body:
         {
-            "message": "Texto del mensaje a enviar",
+            "template_name": "prueba_matricula",  // Nombre de la plantilla
+            "language_code": "es",  // Opcional, default: "es"
             "create_backup": true  // Opcional, default: true
         }
     
@@ -191,14 +193,9 @@ def send_batch_messages():
                 'error': 'No se recibió JSON en el body'
             }), 400
         
-        message = data.get('message')
+        template_name = data.get('template_name', 'prueba_matricula')
+        language_code = data.get('language_code', 'es')
         create_backup = data.get('create_backup', True)
-        
-        if not message:
-            return jsonify({
-                'success': False,
-                'error': 'Campo requerido: message'
-            }), 400
         
         # Cargar CSV
         success, df, msg = csv_handler.load_csv()
@@ -236,8 +233,27 @@ def send_batch_messages():
             phone = contact_info['telefono']
             name = contact_info['nombre']
             
-            # Enviar mensaje
-            success, result = whatsapp_service.send_text_message(phone, message)
+            # Extraer parámetros de la plantilla desde el CSV
+            # IMPORTANTE: El orden DEBE coincidir con el orden de aparición en la plantilla
+            # {{1}}, {{2}}, {{3}}, {{4}}, {{5}}, {{6}}, {{7}}, {{8}}
+            parameters = [
+                str(row.get('nombre', '')),
+                str(row.get('bootcamp', '')),
+                str(row.get('modalidad', '')),
+                str(row.get('ingles_inicio', '')),
+                str(row.get('ingles_fin', '')),
+                str(row.get('inicio_formacion', '')),
+                str(row.get('horario', '')),
+                str(row.get('lugar', ''))
+            ]
+            
+            # Enviar mensaje usando plantilla
+            success, result = whatsapp_service.send_template_message(
+                phone, 
+                template_name, 
+                parameters,
+                language_code
+            )
             
             # Actualizar estado en el DataFrame
             df = csv_handler.update_send_status(df, idx, success, result)
@@ -268,6 +284,8 @@ def send_batch_messages():
         return jsonify({
             'success': True,
             'message': 'Envío masivo completado',
+            'template_name': template_name,
+            'language_code': language_code,
             'stats': {
                 'sent': sent_count,
                 'errors': error_count,
@@ -915,6 +933,89 @@ def upload_from_google():
         import traceback
         app.logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': f'Error interno: {str(e)}'}), 500
+
+
+
+@app.route('/api/messages/send-template', methods=['POST'])
+def send_template():
+    """
+    Envía un mensaje de plantilla a un único contacto.
+    
+    Este endpoint permite probar plantillas individuales con parámetros personalizados.
+    
+    Request Body:
+        {
+            "phone": "+573154963483",
+            "template_name": "prueba_matricula",
+            "parameters": ["Juan", "IA", "Virtual", "20", "1 nov", "5 nov", "L-V 6pm", "Sede Central"],
+            "language_code": "es"  // Opcional, default: "es"
+        }
+    
+    Returns:
+        JSON: Resultado del envío con message_id o error
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No se recibió JSON en el body'
+            }), 400
+        
+        # Validar campos requeridos
+        phone = data.get('phone')
+        template_name = data.get('template_name')
+        parameters = data.get('parameters', [])
+        language_code = data.get('language_code', 'es')
+        
+        if not phone:
+            return jsonify({
+                'success': False,
+                'error': 'El campo "phone" es requerido'
+            }), 400
+        
+        if not template_name:
+            return jsonify({
+                'success': False,
+                'error': 'El campo "template_name" es requerido'
+            }), 400
+        
+        # Enviar mensaje
+        success, result = whatsapp_service.send_template_message(
+            phone,
+            template_name,
+            parameters,
+            language_code
+        )
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Plantilla enviada exitosamente',
+                'message_id': result,
+                'phone': phone,
+                'template_name': template_name,
+                'parameters': parameters,
+                'language_code': language_code
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'error': result,
+                'phone': phone,
+                'template_name': template_name,
+                'parameters': parameters,
+                'language_code': language_code
+            }), 400
+    
+    except Exception as e:
+        app.logger.error(f"Error en send_template: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
