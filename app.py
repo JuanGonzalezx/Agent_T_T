@@ -478,6 +478,87 @@ def debug_template_payload():
         }), 500
 
 
+@app.route('/api/messages/send-template', methods=['POST'])
+def send_template():
+    """
+    Envía un mensaje de plantilla a un único contacto.
+    
+    Este endpoint permite probar plantillas individuales con parámetros personalizados.
+    
+    Request Body:
+        {
+            "phone": "+573154963483",
+            "template_name": "prueba_matricula",
+            "parameters": ["Juan", "IA", "Virtual", "20", "1 nov", "5 nov", "L-V 6pm", "Sede Central"],
+            "language_code": "es"  // Opcional, default: "es"
+        }
+    
+    Returns:
+        JSON: Resultado del envío con message_id o error
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No se recibió JSON en el body'
+            }), 400
+        
+        # Validar campos requeridos
+        phone = data.get('phone')
+        template_name = data.get('template_name')
+        parameters = data.get('parameters', [])
+        language_code = data.get('language_code', 'es')
+        
+        if not phone:
+            return jsonify({
+                'success': False,
+                'error': 'El campo "phone" es requerido'
+            }), 400
+        
+        if not template_name:
+            return jsonify({
+                'success': False,
+                'error': 'El campo "template_name" es requerido'
+            }), 400
+        
+        # Enviar mensaje
+        success, result = whatsapp_service.send_template_message(
+            phone,
+            template_name,
+            parameters,
+            language_code
+        )
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Plantilla enviada exitosamente',
+                'message_id': result,
+                'phone': phone,
+                'template_name': template_name,
+                'parameters': parameters,
+                'language_code': language_code
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'error': result,
+                'phone': phone,
+                'template_name': template_name,
+                'parameters': parameters,
+                'language_code': language_code
+            }), 400
+    
+    except Exception as e:
+        app.logger.error(f"Error en send_template: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     """
