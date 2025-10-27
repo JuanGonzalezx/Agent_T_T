@@ -136,6 +136,7 @@ class WhatsAppService:
         
         payload = {
             "messaging_product": "whatsapp",
+            "recipient_type": "individual",
             "to": recipient,
             "type": "template",
             "template": {

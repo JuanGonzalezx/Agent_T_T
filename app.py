@@ -190,8 +190,8 @@ def send_batch_messages():
                 'error': 'No se recibió JSON en el body'
             }), 400
         
-        template_name = data.get('template_name', 'prueba')  # Cambiar default a 'prueba'
-        language_code = data.get('language_code', 'en_US')  # Cambiar default a 'en_US'
+        template_name = data.get('template_name', 'prueba_matricula')
+        language_code = data.get('language_code', 'es')
         create_backup = data.get('create_backup', True)
         
         # Cargar CSV
@@ -231,11 +231,17 @@ def send_batch_messages():
             name = contact_info['nombre']
             
             # Extraer parámetros de la plantilla desde el CSV
-            # Para plantilla 'prueba' que tiene 3 parámetros: nombre, bootcamp, modalidad
+            # IMPORTANTE: El orden DEBE coincidir con el orden de aparición en la plantilla
+            # {{1}}, {{2}}, {{3}}, {{4}}, {{5}}, {{6}}, {{7}}, {{8}}
             parameters = [
                 str(row.get('nombre', '')),
                 str(row.get('bootcamp', '')),
-                str(row.get('modalidad', ''))
+                str(row.get('modalidad', '')),
+                str(row.get('ingles_inicio', '')),
+                str(row.get('ingles_fin', '')),
+                str(row.get('inicio_formacion', '')),
+                str(row.get('horario', '')),
+                str(row.get('lugar', ''))
             ]
             
             # Enviar mensaje usando plantilla
