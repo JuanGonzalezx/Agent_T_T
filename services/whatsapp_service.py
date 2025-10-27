@@ -87,31 +87,26 @@ class WhatsAppService:
         """
         Construye el payload JSON para un mensaje de plantilla (template).
         
-        Las plantillas son mensajes pre-aprobados por Meta que pueden contener
-        variables dinámicas. Los parámetros deben enviarse en el orden exacto
-        en que aparecen las variables en la plantilla.
-        
         Args:
             recipient: Número de teléfono en formato E.164
             template_name: Nombre de la plantilla aprobada
-            language_code: Código de idioma (ej: "es", "en_US")
-            parameters: Lista ordenada de valores para las variables
-                       El orden debe coincidir con la plantilla
+            language_code: Código de idioma
+            parameters: Lista ordenada de valores
             
         Returns:
             str: JSON string con el payload
         """
-        # Construir componentes de parámetros
+        # Construir componentes solo si hay parámetros
         components = []
         
         if parameters and len(parameters) > 0:
             body_parameters = []
-            # Los parámetros se envían en orden secuencial
-            # WhatsApp los mapea automáticamente a las variables de la plantilla
             for param_value in parameters:
+                # Asegurar que el valor sea string y no esté vacío
+                text_value = str(param_value).strip() if param_value else ""
                 body_parameters.append({
                     "type": "text",
-                    "text": str(param_value)
+                    "text": text_value
                 })
             
             components.append({
@@ -121,7 +116,6 @@ class WhatsAppService:
         
         payload = {
             "messaging_product": "whatsapp",
-            "recipient_type": "individual",
             "to": recipient,
             "type": "template",
             "template": {
@@ -132,7 +126,7 @@ class WhatsAppService:
                 "components": components
             }
         }
-        return json.dumps(payload)
+        return json.dumps(payload, ensure_ascii=False)
     
     def _normalize_phone_number(self, phone: str) -> str:
         """
