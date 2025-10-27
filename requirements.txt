@@ -20,3 +20,13 @@ gunicorn==21.2.0
 
 # Utilidades adicionales
 pytz==2023.3
+
+google-api-python-client
+
+google-auth
+
+google-auth-httplib
+
+google-auth-oauthlib
+
+openpyxl
