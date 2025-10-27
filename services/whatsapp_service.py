@@ -83,7 +83,7 @@ class WhatsAppService:
         }
         return json.dumps(payload)
     
-    def _build_template_message_payload(self, recipient: str, template_name: str, language_code: str, parameters: list) -> str:
+    def _build_template_message_payload(self, recipient: str, template_name: str, language_code: str, parameters: list, parameter_names: list = None, has_header_param: bool = False) -> dict:
         """
         Construye el payload JSON para un mensaje de plantilla (template).
         
@@ -92,31 +92,50 @@ class WhatsAppService:
             template_name: Nombre de la plantilla aprobada
             language_code: Código de idioma
             parameters: Lista ordenada de valores
+            parameter_names: No usado (mantener compatibilidad)
+            has_header_param: Si True, el primer parámetro es para el header
             
         Returns:
-            str: JSON string con el payload
+            dict: Diccionario con el payload (requests lo convertirá a JSON)
         """
         # Construir componentes solo si hay parámetros
         components = []
+        body_start_index = 0
         
-        if parameters and len(parameters) > 0:
+        # Si hay header con parámetro, agregarlo como primer componente
+        if has_header_param and parameters and len(parameters) > 0:
+            components.append({
+                "type": "header",
+                "parameters": [{
+                    "type": "text",
+                    "text": str(parameters[0]).strip()
+                }]
+            })
+            body_start_index = 1
+        
+        # Agregar parámetros del body
+        if parameters and len(parameters) > body_start_index:
             body_parameters = []
-            for param_value in parameters:
-                # Asegurar que el valor sea string y no esté vacío
-                text_value = str(param_value).strip() if param_value else ""
+            for i in range(body_start_index, len(parameters)):
+                text_value = str(parameters[i]).strip() if parameters[i] else ""
+                
+                # Asegurar que no esté vacío
+                if not text_value:
+                    text_value = "N/A"  # Valor por defecto
+                
                 body_parameters.append({
                     "type": "text",
                     "text": text_value
                 })
             
-            components.append({
-                "type": "body",
-                "parameters": body_parameters
-            })
+            if body_parameters:
+                components.append({
+                    "type": "body",
+                    "parameters": body_parameters
+                })
         
         payload = {
             "messaging_product": "whatsapp",
-            "recipient_type": "individual",
             "to": recipient,
             "type": "template",
             "template": {
@@ -124,11 +143,10 @@ class WhatsAppService:
                 "language": {
                     "code": language_code
                 },
-                "components": components
+                "components": components if components else []
             }
         }
-        # Usar dumps sin escape de caracteres Unicode
-        return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+        return payload
     
     def _normalize_phone_number(self, phone: str) -> str:
         """
@@ -216,7 +234,7 @@ class WhatsAppService:
         except Exception as e:
             return False, f"Error inesperado: {str(e)}"
     
-    def send_template_message(self, phone: str, template_name: str, parameters: list = None, language_code: str = "es") -> Tuple[bool, str]:
+    def send_template_message(self, phone: str, template_name: str, parameters: list = None, language_code: str = "es", parameter_names: list = None, has_header_param: bool = False) -> Tuple[bool, str]:
         """
         Envía un mensaje usando una plantilla pre-aprobada de WhatsApp.
         
@@ -229,6 +247,8 @@ class WhatsAppService:
             parameters: Lista ordenada de valores para las variables
                        Deben estar en el mismo orden que en la plantilla
             language_code: Código de idioma de la plantilla (default: "es")
+            parameter_names: No usado (compatibilidad)
+            has_header_param: Si True, el primer parámetro es para el header
             
         Returns:
             Tuple[bool, str]: (éxito, message_id o mensaje_error)
@@ -246,20 +266,22 @@ class WhatsAppService:
             normalized_phone, 
             template_name, 
             language_code, 
-            parameters or []
+            parameters or [],
+            parameter_names,
+            has_header_param
         )
         
         # Configurar headers de autenticación
         headers = {
-            "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {self.access_token}"
         }
         
         try:
             # Timeout de 30s previene bloqueos indefinidos
+            # Usar json= en lugar de data= para que requests maneje el encoding correctamente
             response = requests.post(
                 self.base_url,
-                data=payload,
+                json=payload,
                 headers=headers,
                 timeout=30
             )
