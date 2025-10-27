@@ -114,32 +114,6 @@ class WhatsAppService:
                 "parameters": body_parameters
             })
         
-        # Agregar componentes de botones si la plantilla los tiene
-        # Los botones de respuesta rápida (quick_reply) deben declararse aunque no tengan variables
-        components.append({
-            "type": "button",
-            "sub_type": "quick_reply",
-            "index": "0",
-            "parameters": [
-                {
-                    "type": "payload",
-                    "payload": "Si"
-                }
-            ]
-        })
-        
-        components.append({
-            "type": "button",
-            "sub_type": "quick_reply",
-            "index": "1",
-            "parameters": [
-                {
-                    "type": "payload",
-                    "payload": "No"
-                }
-            ]
-        })
-        
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -153,7 +127,8 @@ class WhatsAppService:
                 "components": components
             }
         }
-        return json.dumps(payload)
+        # Usar dumps sin escape de caracteres Unicode
+        return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
     
     def _normalize_phone_number(self, phone: str) -> str:
         """
@@ -276,7 +251,7 @@ class WhatsAppService:
         
         # Configurar headers de autenticación
         headers = {
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {self.access_token}"
         }
         
