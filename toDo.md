@@ -31,10 +31,7 @@
   - Validar funcionalidad de botones
   - Responsive design
 
-### 📱 WhatsApp & Meta
-- [ ] **Revisar plantillas** en Meta Developer
-  - Verificar plantillas activas
-  - Actualizar mensajes si es necesario
+
   
 - [ ] **Actualizar o añadir nuevo número** de Talento Tech
   - Configurar nuevo número en Meta
@@ -52,6 +49,9 @@
 
 _(Mueve aquí las tareas cuando las completes)_
 
----
+-### 📱 WhatsApp & Meta
+- [✅] **Revisar plantillas** en Meta Developer
+  - Verificar plantillas activas
+  - Actualizar mensajes si es necesario
 
 **Última actualización:** 27 de octubre, 2025

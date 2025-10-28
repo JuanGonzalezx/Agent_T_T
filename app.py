@@ -46,6 +46,71 @@ whatsapp_service = WhatsAppService()
 google_drive_service = GoogleDriveService()
 csv_handler = CSVHandler(CSV_PATH)
 
+# Variables para sincronización automática con Drive
+pending_sync = False
+cached_file_id = None
+cached_access_token = None
+cached_mime_type = None
+
+
+def sync_to_drive_if_needed():
+    """
+    Sincroniza bd_envio.csv a Google Drive si hay cambios pendientes.
+    Esta función es llamada por el scheduler cada 5 minutos.
+    Solo sincroniza si pending_sync es True, optimizando llamadas a la API.
+    """
+    global pending_sync, cached_file_id, cached_access_token, cached_mime_type
+    
+    # Verificar si hay cambios pendientes
+    if not pending_sync:
+        app.logger.info("⏭️ Sync omitido: No hay cambios pendientes")
+        return
+    
+    # Verificar credenciales cacheadas
+    if not cached_file_id or not cached_access_token:
+        app.logger.warning("⚠️ Sync omitido: No hay credenciales de Google cacheadas")
+        return
+    
+    try:
+        app.logger.info("🔄 Iniciando sincronización automática con Drive...")
+        
+        # Cargar CSV local
+        success, df, msg = csv_handler.load_csv()
+        if not success:
+            app.logger.error(f"❌ Error cargando CSV: {msg}")
+            return
+        
+        # Actualizar en Drive según el tipo de archivo
+        update_success = False
+        update_message = ""
+        
+        if cached_mime_type == 'application/vnd.google-apps.spreadsheet':
+            update_success, update_message = google_drive_service.update_google_sheet(
+                cached_file_id, cached_access_token, df
+            )
+        elif cached_mime_type == 'text/csv':
+            update_success, update_message = google_drive_service.update_csv_file(
+                cached_file_id, cached_access_token, df
+            )
+        elif cached_mime_type == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+            update_success, update_message = google_drive_service.update_xlsx_file(
+                cached_file_id, cached_access_token, df
+            )
+        else:
+            app.logger.warning(f"⚠️ Tipo de archivo no soportado: {cached_mime_type}")
+            return
+        
+        if update_success:
+            pending_sync = False  # Resetear bandera
+            app.logger.info(f"✅ Sincronización automática exitosa: {update_message}")
+        else:
+            app.logger.error(f"❌ Fallo en sincronización automática: {update_message}")
+            
+    except Exception as e:
+        app.logger.error(f"❌ Error en sincronización automática: {str(e)}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -427,6 +492,11 @@ def upload_from_google():
         if not access_token:
             return jsonify({'success': False, 'error': 'accessToken requerido'}), 400
         
+        # Cachear credenciales para sincronización automática
+        global cached_file_id, cached_access_token, cached_mime_type
+        cached_file_id = file_id
+        cached_access_token = access_token
+        
         app.logger.info(f"📥 Procesando archivo de Google Drive: {file_id}")
         
         # 1. Obtener metadata del archivo
@@ -437,6 +507,9 @@ def upload_from_google():
         mime_type = metadata.get('mimeType', '')
         file_name = metadata.get('name', file_id)
         is_google_sheet = mime_type == 'application/vnd.google-apps.spreadsheet'
+        
+        # Cachear mime_type para sincronización automática
+        cached_mime_type = mime_type
         
         app.logger.info(f"📄 Archivo: {file_name} | Tipo: {mime_type}")
         
@@ -750,6 +823,11 @@ def webhook():
                                     csv_handler.save_csv(df)
                                     app.logger.info(f"✅ {msg} - Respuesta: '{standardized_response}'")
                                     
+                                    # Marcar que hay cambios pendientes para sincronizar con Drive
+                                    global pending_sync
+                                    pending_sync = True
+                                    app.logger.info("🔄 Cambios pendientes marcados para sincronización con Drive")
+                                    
                                     # Enviar mensaje de agradecimiento
                                     # Esto mejora la experiencia del usuario y confirma la recepción
                                     thank_you_message = (
@@ -806,6 +884,36 @@ def webhook():
             return jsonify({'status': 'ok'}), 200
 
 
+@app.route('/api/sync/drive-manual', methods=['POST'])
+def sync_drive_manual():
+    """
+    Fuerza una sincronización manual con Google Drive.
+    
+    Este endpoint permite ejecutar la sincronización inmediatamente
+    sin esperar al próximo ciclo del scheduler. Útil para:
+    - Testing de la funcionalidad de sync
+    - Sincronización forzada cuando se necesita actualizar Drive inmediatamente
+    - Debugging de problemas de sincronización
+    
+    Returns:
+        JSON: Resultado de la operación de sincronización
+    """
+    try:
+        app.logger.info("🔧 Sincronización manual solicitada")
+        sync_to_drive_if_needed()
+        return jsonify({
+            'success': True,
+            'message': 'Sincronización manual ejecutada',
+            'pending_sync': pending_sync
+        }), 200
+    except Exception as e:
+        app.logger.error(f"❌ Error en sincronización manual: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.errorhandler(404)
 def not_found(error):
     """
@@ -833,6 +941,27 @@ def internal_error(error):
     }), 500
 
 
+# Configurar scheduler para sincronización automática con Drive
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(
+    func=sync_to_drive_if_needed,
+    trigger="interval",
+    minutes=5,
+    id='sync_drive_job',
+    name='Sincronización automática con Google Drive',
+    replace_existing=True
+)
+scheduler.start()
+
+# Asegurar que el scheduler se detenga al cerrar la app
+atexit.register(lambda: scheduler.shutdown())
+
+app.logger.info("⏰ Scheduler iniciado: sincronización automática cada 5 minutos")
+
+
 if __name__ == '__main__':
     # Configuración para desarrollo
     # En producción, usar un servidor WSGI como Gunicorn
@@ -846,6 +975,7 @@ if __name__ == '__main__':
     print(f"  🔧 Debug: {debug}")
     print(f"  📂 CSV: {CSV_PATH}")
     print(f"  ⏱️  Delay entre mensajes: {DELAY_SECONDS}s")
+    print("  🔄 Sync automático: Cada 5 minutos")
     print("\n" + "="*70 + "\n")
     
     app.run(host='0.0.0.0', port=port, debug=debug)

@@ -21,4 +21,7 @@ gunicorn==21.2.0
 # Utilidades adicionales
 pytz==2023.3
 
+# Scheduler para sincronización automática
+APScheduler==3.11.0
+
 openpyxl
