@@ -18,6 +18,7 @@ import pandas as pd
 
 from services.whatsapp_service import WhatsAppService
 from services.google_drive_service import GoogleDriveService
+from services.db_handler import DatabaseHandler
 from utils.csv_handler import CSVHandler
 from utils.data_normalizer import (
     normalize_phone_column,
@@ -45,6 +46,7 @@ DELAY_SECONDS = float(os.getenv("DELAY_SECONDS", "1.5"))
 whatsapp_service = WhatsAppService()
 google_drive_service = GoogleDriveService()
 csv_handler = CSVHandler(CSV_PATH)
+db_handler = DatabaseHandler()  # Nuevo: manejador de SQLite
 
 # Variables para sincronización automática con Drive
 pending_sync = False
@@ -331,6 +333,28 @@ def send_batch_messages():
             # Actualizar estado en el DataFrame
             df = csv_handler.update_send_status(df, idx, success, result)
             
+            # Guardar también en SQLite
+            if success:
+                estudiante_data = {
+                    'telefono_e164': phone,
+                    'nombre': name,
+                    'bootcamp_id': row.get('bootcamp_id', ''),
+                    'bootcamp_nombre': row.get('bootcamp_nombre', ''),
+                    'modalidad': row.get('modalidad', ''),
+                    'ingles_inicio': row.get('ingles_inicio', ''),
+                    'ingles_fin': row.get('ingles_fin', ''),
+                    'inicio_formacion': row.get('inicio_formacion', ''),
+                    'horario': row.get('horario', ''),
+                    'lugar': row.get('lugar', ''),
+                    'opt_in': row.get('opt_in', ''),
+                    'estado_envio': 'sent',
+                    'fecha_envio': df.at[idx, 'fecha_envio'],
+                    'message_id': result
+                }
+                db_success, db_msg = db_handler.insert_or_update_estudiante(estudiante_data)
+                if not db_success:
+                    app.logger.warning(f"⚠️ No se pudo guardar en SQLite: {db_msg}")
+            
             # Registrar resultado
             results.append({
                 'name': name,
@@ -571,6 +595,51 @@ def upload_from_google():
             return jsonify({'success': False, 'error': f'No se pudo guardar CSV: {save_msg}'}), 500
         
         app.logger.info(f"✅ bd_envio.csv actualizado con {len(df)} registros")
+        
+        # 8.1. Guardar en SQLite
+        app.logger.info("💾 Guardando datos en SQLite...")
+        sqlite_success_count = 0
+        sqlite_error_count = 0
+        
+        # Primero, registrar bootcamps únicos
+        bootcamp_ids = df['bootcamp_id'].dropna().unique()
+        for bootcamp_id in bootcamp_ids:
+            if bootcamp_id:
+                # Obtener el nombre correspondiente
+                bootcamp_row = df[df['bootcamp_id'] == bootcamp_id].iloc[0]
+                bootcamp_nombre = bootcamp_row.get('bootcamp_nombre', '')
+                success, msg = db_handler.insert_or_update_bootcamp(bootcamp_id, bootcamp_nombre)
+                if success:
+                    app.logger.info(f"  ✓ Bootcamp registrado: {bootcamp_id}")
+        
+        # Luego, registrar estudiantes
+        for idx, row in df.iterrows():
+            estudiante_data = {
+                'telefono_e164': row.get('telefono_e164', ''),
+                'nombre': row.get('nombre', ''),
+                'bootcamp_id': row.get('bootcamp_id', ''),
+                'bootcamp_nombre': row.get('bootcamp_nombre', ''),
+                'modalidad': row.get('modalidad', ''),
+                'ingles_inicio': row.get('ingles_inicio', ''),
+                'ingles_fin': row.get('ingles_fin', ''),
+                'inicio_formacion': row.get('inicio_formacion', ''),
+                'horario': row.get('horario', ''),
+                'lugar': row.get('lugar', ''),
+                'opt_in': row.get('opt_in', ''),
+                'estado_envio': row.get('estado_envio', ''),
+                'fecha_envio': row.get('fecha_envio', None),
+                'message_id': row.get('message_id', ''),
+                'respuesta': row.get('respuesta', ''),
+                'fecha_respuesta': row.get('fecha_respuesta', None)
+            }
+            success, msg = db_handler.insert_or_update_estudiante(estudiante_data)
+            if success:
+                sqlite_success_count += 1
+            else:
+                sqlite_error_count += 1
+                app.logger.warning(f"  ⚠️ Error guardando estudiante {estudiante_data['nombre']}: {msg}")
+        
+        app.logger.info(f"✅ SQLite: {sqlite_success_count} estudiantes guardados, {sqlite_error_count} errores")
         
         # 9. Actualizar archivo en Drive (con las nuevas columnas de tracking)
         update_success = False
@@ -819,6 +888,17 @@ def webhook():
                                 if success:
                                     csv_handler.save_csv(df)
                                     app.logger.info(f"✅ {msg} - Respuesta: '{standardized_response}'")
+                                    
+                                    # Actualizar también en SQLite
+                                    db_success, db_msg = db_handler.update_respuesta(
+                                        from_number,
+                                        standardized_response,
+                                        df.at[csv_handler.find_contact_by_phone(df, from_number), 'fecha_respuesta']
+                                    )
+                                    if db_success:
+                                        app.logger.info(f"✅ SQLite actualizado: {db_msg}")
+                                    else:
+                                        app.logger.warning(f"⚠️ SQLite no actualizado: {db_msg}")
 
                                     # Marcar pending sync (si usas este flag global)
                                     try:
@@ -916,6 +996,197 @@ def sync_drive_manual():
         return jsonify({
             'success': False,
             'error': str(e)
+        }), 500
+
+
+# ============================================================================
+# SQLite Query Endpoints
+# ============================================================================
+
+@app.route('/api/estudiantes/all', methods=['GET'])
+def get_all_estudiantes():
+    """
+    Obtiene todos los estudiantes con paginación.
+    
+    Query Parameters:
+        limit (int): Número máximo de registros (default: 100)
+        offset (int): Número de registros a saltar (default: 0)
+    
+    Returns:
+        JSON: Lista de estudiantes con metadatos de paginación
+    """
+    try:
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+        
+        estudiantes, total = db_handler.get_all_estudiantes(limit, offset)
+        
+        return jsonify({
+            'success': True,
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+            'count': len(estudiantes),
+            'estudiantes': estudiantes
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error en get_all_estudiantes: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/estudiantes/bootcamp/<bootcamp_id>', methods=['GET'])
+def get_estudiantes_by_bootcamp(bootcamp_id):
+    """
+    Filtra estudiantes por bootcamp_id.
+    
+    Path Parameters:
+        bootcamp_id (str): Código del bootcamp a consultar
+    
+    Returns:
+        JSON: Lista de estudiantes del bootcamp especificado
+    """
+    try:
+        estudiantes = db_handler.get_estudiantes_by_bootcamp(bootcamp_id)
+        
+        return jsonify({
+            'success': True,
+            'bootcamp_id': bootcamp_id,
+            'count': len(estudiantes),
+            'estudiantes': estudiantes
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error en get_estudiantes_by_bootcamp: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/estudiantes/phone/<phone>', methods=['GET'])
+def get_estudiante_by_phone(phone):
+    """
+    Busca estudiantes por número de teléfono.
+    
+    Path Parameters:
+        phone (str): Número de teléfono a buscar
+    
+    Returns:
+        JSON: Registros del estudiante con ese teléfono
+    """
+    try:
+        estudiantes = db_handler.get_estudiante_by_phone(phone)
+        
+        return jsonify({
+            'success': True,
+            'phone': phone,
+            'count': len(estudiantes),
+            'estudiantes': estudiantes
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error en get_estudiante_by_phone: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/estudiantes/date-range', methods=['GET'])
+def get_estudiantes_by_date():
+    """
+    Filtra estudiantes por rango de fechas de envío.
+    
+    Query Parameters:
+        fecha_inicio (str): Fecha inicial en formato YYYY-MM-DD (opcional)
+        fecha_fin (str): Fecha final en formato YYYY-MM-DD (opcional)
+    
+    Returns:
+        JSON: Estudiantes filtrados por rango de fechas
+    """
+    try:
+        fecha_inicio = request.args.get('fecha_inicio')
+        fecha_fin = request.args.get('fecha_fin')
+        
+        estudiantes = db_handler.get_estudiantes_by_date_range(fecha_inicio, fecha_fin)
+        
+        return jsonify({
+            'success': True,
+            'fecha_inicio': fecha_inicio,
+            'fecha_fin': fecha_fin,
+            'count': len(estudiantes),
+            'estudiantes': estudiantes
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error en get_estudiantes_by_date: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/bootcamps', methods=['GET'])
+def get_all_bootcamps():
+    """
+    Lista todos los bootcamps registrados.
+    
+    Este endpoint es útil para poblar dropdowns en el frontend
+    con los códigos de bootcamp disponibles.
+    
+    Returns:
+        JSON: Lista de bootcamps con sus códigos y nombres
+    """
+    try:
+        bootcamps = db_handler.get_all_bootcamps()
+        
+        return jsonify({
+            'success': True,
+            'count': len(bootcamps),
+            'bootcamps': bootcamps
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error en get_all_bootcamps: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/estadisticas', methods=['GET'])
+def get_estadisticas():
+    """
+    Obtiene estadísticas generales del sistema.
+    
+    Proporciona métricas sobre:
+    - Total de estudiantes
+    - Mensajes enviados/error
+    - Respuestas confirmadas (Sí/No)
+    - Pendientes de respuesta
+    - Total de bootcamps
+    - Tasa de respuesta
+    
+    Returns:
+        JSON: Estadísticas completas del sistema
+    """
+    try:
+        stats = db_handler.get_estadisticas()
+        
+        return jsonify({
+            'success': True,
+            'estadisticas': stats
+        }), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error en get_estadisticas: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
         }), 500
 
 
