@@ -4,6 +4,41 @@
 
 ## 🔄 Tareas Pendientes
 
+### 🎨 Frontend - Vista de Visualización de Mensajes
+- [ ] **Crear página/componente de visualización de mensajes enviados**
+  - [ ] Diseñar layout de la tabla con columnas principales:
+    - Teléfono, Nombre, Bootcamp, Modalidad, Estado, Fecha Envío, Respuesta
+  - [ ] Implementar tabla responsive (DataTable, AG-Grid, o similar)
+  - [ ] Agregar indicadores visuales (badges de color para estados)
+
+- [ ] **Implementar sistema de filtros**
+  - [ ] **Filtro principal: Dropdown de Bootcamps**
+    - Consumir `GET /api/bootcamps` para poblar opciones
+    - Aplicar filtro con `GET /api/estudiantes/bootcamp/{id}`
+  - [ ] **Filtro secundario: Búsqueda por teléfono**
+    - Input de búsqueda con validación
+    - Consumir `GET /api/estudiantes/phone/{phone}`
+  - [ ] **Filtro de fechas**
+    - Date picker para rango (fecha inicio - fecha fin)
+    - Consumir `GET /api/estudiantes/date-range?fecha_inicio=X&fecha_fin=Y`
+  - [ ] Botón "Limpiar filtros" para resetear vista
+
+- [ ] **Implementar paginación**
+  - [ ] Controles de paginación (anterior/siguiente)
+  - [ ] Selector de items por página (10, 25, 50, 100)
+  - [ ] Indicador de "Mostrando X-Y de Z registros"
+
+- [ ] **Panel de estadísticas (opcional)**
+  - [ ] Consumir `GET /api/estadisticas`
+  - [ ] Mostrar cards con métricas:
+    - Total enviados, Confirmados Sí/No, Pendientes, Tasa de respuesta
+  - [ ] Gráfico simple (opcional)
+
+- [ ] **Acciones sobre registros (opcional)**
+  - [ ] Botón "Ver detalle" para modal con info completa
+  - [ ] Botón "Editar" (actualizar campos via CRUD)
+  - [ ] Botón "Eliminar" con confirmación
+
 ### 🔧 Backend & Servicios
 - [ ] **Crear botón y configurar envío masivo** en el backend
   - Implementar endpoint para envío masivo
@@ -48,6 +83,15 @@
   - Implementar webhook de Google Drive
   - Actualizar `fileId` de forma automática
   - Validar sincronización
+
+- [x] **Implementar base de datos SQLite**
+  - ✅ Creadas tablas: `estudiantes` y `bootcamps`
+  - ✅ Constraint UNIQUE en `telefono_e164`
+  - ✅ 4 índices optimizados para búsquedas
+  - ✅ Dual-write CSV + SQLite en todos los endpoints
+  - ✅ WAL mode + reintentos para concurrencia
+  - ✅ 13 endpoints CRUD completos (consulta, editar, eliminar)
+  - ✅ Documentación completa en `SQLITE_API_DOCS.md`
 
 ### 📱 WhatsApp & Meta
 - [x] **Revisar plantillas** en Meta Developer
