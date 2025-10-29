@@ -14,10 +14,6 @@
   - Validar datos antes del envío
   - Manejo de errores y respuestas
 
-- [ ] **Configurar webhook** para actualizar dinámicamente el archivo
-  - Implementar webhook de Google Drive
-  - Actualizar `fileId` de forma automática
-  - Validar sincronización
 
 ### 📊 Datos
 - [ ] **Revisar y normalizar campos** del `bd_envio.csv`
@@ -54,4 +50,11 @@ _(Mueve aquí las tareas cuando las completes)_
   - Verificar plantillas activas
   - Actualizar mensajes si es necesario
 
-**Última actualización:** 27 de octubre, 2025
+
+- [✅] **Configurar webhook** para actualizar dinámicamente el archivo
+  - Implementar webhook de Google Drive
+  - Actualizar `fileId` de forma automática
+  - Validar sincronización
+
+  
+**Última actualización:** 28 de octubre, 2025
