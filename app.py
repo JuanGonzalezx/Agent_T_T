@@ -843,11 +843,30 @@ def webhook():
                                         app.logger.error(f"Error enviando agradecimiento: {str(e)}")
 
                                 else:
-                                    app.logger.warning(f"⚠️ {msg}")
+                                    # Verificar si ya había respondido anteriormente
+                                    if msg.startswith("already_answered:"):
+                                        previous_answer = msg.split(":", 1)[1]
+                                        app.logger.info(f"⚠️ Usuario {from_number} ya respondió anteriormente: '{previous_answer}' - Ignorando nuevo intento")
+                                        # No enviar ningún mensaje, simplemente ignorar
+                                    else:
+                                        app.logger.warning(f"⚠️ {msg}")
 
                             else:
-                                # Respuesta no válida → instrucción
+                                # Respuesta no válida → verificar si ya respondió antes
                                 app.logger.info(f"ℹ️ Respuesta no válida de {from_number}: '{response_text}'")
+                                
+                                # Verificar si el usuario ya tiene una respuesta registrada
+                                success, df, msg = csv_handler.load_csv()
+                                if success:
+                                    idx = csv_handler.find_contact_by_phone(df, from_number)
+                                    if idx is not None:
+                                        respuesta_existente = str(df.at[idx, 'respuesta']).strip()
+                                        if respuesta_existente and respuesta_existente != 'nan':
+                                            # Ya respondió, ignorar mensaje inválido
+                                            app.logger.info(f"ℹ️ Usuario ya respondió '{respuesta_existente}' - Ignorando mensaje inválido")
+                                            continue
+                                
+                                # Si no ha respondido, enviar mensaje de validación
                                 try:
                                     whatsapp_service.send_text_message(
                                         from_number,

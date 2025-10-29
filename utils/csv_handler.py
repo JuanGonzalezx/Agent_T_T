@@ -264,7 +264,13 @@ class CSVHandler:
         if idx is None:
             return False, df, f"Contacto no encontrado: {phone}"
         
-        # Actualizar la respuesta
+        # Verificar si ya tiene una respuesta registrada
+        respuesta_existente = str(df.at[idx, 'respuesta']).strip()
+        if respuesta_existente and respuesta_existente != 'nan':
+            # Ya respondió anteriormente, no permitir sobrescribir
+            return False, df, f"already_answered:{respuesta_existente}"
+        
+        # Actualizar la respuesta (solo si no había respuesta previa)
         df.at[idx, 'respuesta'] = response_text
         df.at[idx, 'fecha_respuesta'] = datetime.now().isoformat()
         
