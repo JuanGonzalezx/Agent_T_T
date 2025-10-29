@@ -10,6 +10,8 @@ import sqlite3
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 import os
+import threading
+import time
 
 
 class DatabaseHandler:
@@ -29,13 +31,45 @@ class DatabaseHandler:
             db_path: Ruta al archivo de base de datos SQLite
         """
         self.db_path = db_path
+        self._lock = threading.RLock()  # Lock para operaciones críticas
         self._init_database()
     
     def _get_connection(self) -> sqlite3.Connection:
-        """Crea una conexión a la base de datos."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row  # Permite acceso por nombre de columna
+        """Crea una conexión a la base de datos con configuración optimizada para concurrencia."""
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=30.0,  # Esperar hasta 30 segundos si está bloqueada
+            check_same_thread=False,  # Permitir uso desde múltiples threads
+            isolation_level=None  # Autocommit mode para mejor concurrencia
+        )
+        conn.row_factory = sqlite3.Row
+        # Habilitar Write-Ahead Logging para mejor concurrencia
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=30000')  # 30 segundos
+        conn.execute('PRAGMA synchronous=NORMAL')  # Balance entre velocidad y seguridad
         return conn
+    
+    def _execute_with_retry(self, func, max_retries=3, delay=0.5):
+        """
+        Ejecuta una función con reintentos en caso de bloqueo.
+        
+        Args:
+            func: Función a ejecutar
+            max_retries: Número máximo de reintentos
+            delay: Segundos de espera entre reintentos
+            
+        Returns:
+            El resultado de la función
+        """
+        for attempt in range(max_retries):
+            try:
+                return func()
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < max_retries - 1:
+                    time.sleep(delay * (attempt + 1))  # Backoff exponencial
+                    continue
+                raise
+        return None
     
     def _init_database(self):
         """Inicializa las tablas de la base de datos si no existen."""
@@ -117,21 +151,23 @@ class DatabaseHandler:
         if not bootcamp_id or not bootcamp_nombre:
             return False, "bootcamp_id y bootcamp_nombre son requeridos"
         
-        try:
+        def _execute():
             conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                INSERT INTO bootcamps (bootcamp_id, bootcamp_nombre)
-                VALUES (?, ?)
-                ON CONFLICT(bootcamp_id) 
-                DO UPDATE SET bootcamp_nombre = excluded.bootcamp_nombre
-            ''', (bootcamp_id, bootcamp_nombre))
-            
-            conn.commit()
-            conn.close()
-            return True, f"Bootcamp {bootcamp_id} registrado"
-            
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO bootcamps (bootcamp_id, bootcamp_nombre)
+                    VALUES (?, ?)
+                    ON CONFLICT(bootcamp_id) 
+                    DO UPDATE SET bootcamp_nombre = excluded.bootcamp_nombre
+                ''', (bootcamp_id, bootcamp_nombre))
+                conn.commit()
+                return True, f"Bootcamp {bootcamp_id} registrado"
+            finally:
+                conn.close()
+        
+        try:
+            return self._execute_with_retry(_execute)
         except Exception as e:
             return False, f"Error al guardar bootcamp: {str(e)}"
     
@@ -178,79 +214,81 @@ class DatabaseHandler:
             if field not in estudiante_data or not estudiante_data[field]:
                 return False, f"Campo requerido faltante: {field}"
         
-        try:
+        # Preparar datos para inserción
+        telefono = estudiante_data.get('telefono_e164')
+        nombre = estudiante_data.get('nombre')
+        bootcamp_id = estudiante_data.get('bootcamp_id') or ''
+        bootcamp_nombre = estudiante_data.get('bootcamp_nombre') or ''
+        modalidad = estudiante_data.get('modalidad') or ''
+        ingles_inicio = estudiante_data.get('ingles_inicio') or ''
+        ingles_fin = estudiante_data.get('ingles_fin') or ''
+        inicio_formacion = estudiante_data.get('inicio_formacion') or ''
+        horario = estudiante_data.get('horario') or ''
+        lugar = estudiante_data.get('lugar') or ''
+        opt_in = estudiante_data.get('opt_in') or ''
+        estado_envio = estudiante_data.get('estado_envio') or ''
+        fecha_envio = estudiante_data.get('fecha_envio') or None
+        message_id = estudiante_data.get('message_id') or ''
+        respuesta = estudiante_data.get('respuesta') or ''
+        fecha_respuesta = estudiante_data.get('fecha_respuesta') or None
+        
+        def _execute():
             conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            # Preparar datos para inserción
-            telefono = estudiante_data.get('telefono_e164')
-            nombre = estudiante_data.get('nombre')
-            bootcamp_id = estudiante_data.get('bootcamp_id') or ''
-            bootcamp_nombre = estudiante_data.get('bootcamp_nombre') or ''
-            modalidad = estudiante_data.get('modalidad') or ''
-            ingles_inicio = estudiante_data.get('ingles_inicio') or ''
-            ingles_fin = estudiante_data.get('ingles_fin') or ''
-            inicio_formacion = estudiante_data.get('inicio_formacion') or ''
-            horario = estudiante_data.get('horario') or ''
-            lugar = estudiante_data.get('lugar') or ''
-            opt_in = estudiante_data.get('opt_in') or ''
-            estado_envio = estudiante_data.get('estado_envio') or ''
-            fecha_envio = estudiante_data.get('fecha_envio') or None
-            message_id = estudiante_data.get('message_id') or ''
-            respuesta = estudiante_data.get('respuesta') or ''
-            fecha_respuesta = estudiante_data.get('fecha_respuesta') or None
-            
-            cursor.execute('''
-                INSERT INTO estudiantes (
-                    telefono_e164, nombre, bootcamp_id, bootcamp_nombre,
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO estudiantes (
+                        telefono_e164, nombre, bootcamp_id, bootcamp_nombre,
+                        modalidad, ingles_inicio, ingles_fin, inicio_formacion,
+                        horario, lugar, opt_in, estado_envio, fecha_envio,
+                        message_id, respuesta, fecha_respuesta
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(telefono_e164) 
+                    DO UPDATE SET
+                        nombre = excluded.nombre,
+                        bootcamp_id = excluded.bootcamp_id,
+                        bootcamp_nombre = excluded.bootcamp_nombre,
+                        modalidad = excluded.modalidad,
+                        ingles_inicio = excluded.ingles_inicio,
+                        ingles_fin = excluded.ingles_fin,
+                        inicio_formacion = excluded.inicio_formacion,
+                        horario = excluded.horario,
+                        lugar = excluded.lugar,
+                        opt_in = excluded.opt_in,
+                        estado_envio = CASE 
+                            WHEN excluded.estado_envio != '' THEN excluded.estado_envio 
+                            ELSE estudiantes.estado_envio 
+                        END,
+                        fecha_envio = CASE 
+                            WHEN excluded.fecha_envio IS NOT NULL THEN excluded.fecha_envio 
+                            ELSE estudiantes.fecha_envio 
+                        END,
+                        message_id = CASE 
+                            WHEN excluded.message_id != '' THEN excluded.message_id 
+                            ELSE estudiantes.message_id 
+                        END,
+                        respuesta = CASE 
+                            WHEN excluded.respuesta != '' THEN excluded.respuesta 
+                            ELSE estudiantes.respuesta 
+                        END,
+                        fecha_respuesta = CASE 
+                            WHEN excluded.fecha_respuesta IS NOT NULL THEN excluded.fecha_respuesta 
+                            ELSE estudiantes.fecha_respuesta 
+                        END,
+                        fecha_actualizacion = CURRENT_TIMESTAMP
+                ''', (
+                    telefono, nombre, bootcamp_id, bootcamp_nombre,
                     modalidad, ingles_inicio, ingles_fin, inicio_formacion,
                     horario, lugar, opt_in, estado_envio, fecha_envio,
                     message_id, respuesta, fecha_respuesta
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(telefono_e164) 
-                DO UPDATE SET
-                    nombre = excluded.nombre,
-                    bootcamp_id = excluded.bootcamp_id,
-                    bootcamp_nombre = excluded.bootcamp_nombre,
-                    modalidad = excluded.modalidad,
-                    ingles_inicio = excluded.ingles_inicio,
-                    ingles_fin = excluded.ingles_fin,
-                    inicio_formacion = excluded.inicio_formacion,
-                    horario = excluded.horario,
-                    lugar = excluded.lugar,
-                    opt_in = excluded.opt_in,
-                    estado_envio = CASE 
-                        WHEN excluded.estado_envio != '' THEN excluded.estado_envio 
-                        ELSE estudiantes.estado_envio 
-                    END,
-                    fecha_envio = CASE 
-                        WHEN excluded.fecha_envio IS NOT NULL THEN excluded.fecha_envio 
-                        ELSE estudiantes.fecha_envio 
-                    END,
-                    message_id = CASE 
-                        WHEN excluded.message_id != '' THEN excluded.message_id 
-                        ELSE estudiantes.message_id 
-                    END,
-                    respuesta = CASE 
-                        WHEN excluded.respuesta != '' THEN excluded.respuesta 
-                        ELSE estudiantes.respuesta 
-                    END,
-                    fecha_respuesta = CASE 
-                        WHEN excluded.fecha_respuesta IS NOT NULL THEN excluded.fecha_respuesta 
-                        ELSE estudiantes.fecha_respuesta 
-                    END,
-                    fecha_actualizacion = CURRENT_TIMESTAMP
-            ''', (
-                telefono, nombre, bootcamp_id, bootcamp_nombre,
-                modalidad, ingles_inicio, ingles_fin, inicio_formacion,
-                horario, lugar, opt_in, estado_envio, fecha_envio,
-                message_id, respuesta, fecha_respuesta
-            ))
-            
-            conn.commit()
-            conn.close()
-            return True, f"Estudiante {nombre} registrado/actualizado"
-            
+                ))
+                conn.commit()
+                return True, f"Estudiante {nombre} registrado/actualizado"
+            finally:
+                conn.close()
+        
+        try:
+            return self._execute_with_retry(_execute)
         except Exception as e:
             return False, f"Error al guardar estudiante: {str(e)}"
     
@@ -468,31 +506,33 @@ class DatabaseHandler:
         Returns:
             Tuple[bool, str]: (éxito, mensaje)
         """
-        try:
+        # Normalizar teléfono
+        telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+        
+        def _execute():
             conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            # Normalizar teléfono
-            telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
-            
-            cursor.execute('''
-                UPDATE estudiantes
-                SET respuesta = ?,
-                    fecha_respuesta = ?,
-                    fecha_actualizacion = CURRENT_TIMESTAMP
-                WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
-                  AND (respuesta IS NULL OR respuesta = '')
-            ''', (respuesta, fecha_respuesta, telefono_clean))
-            
-            rows_affected = cursor.rowcount
-            conn.commit()
-            conn.close()
-            
-            if rows_affected > 0:
-                return True, f"Respuesta actualizada para {rows_affected} registro(s)"
-            else:
-                return False, "No se encontró el estudiante o ya tiene respuesta"
-            
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE estudiantes
+                    SET respuesta = ?,
+                        fecha_respuesta = ?,
+                        fecha_actualizacion = CURRENT_TIMESTAMP
+                    WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+                      AND (respuesta IS NULL OR respuesta = '')
+                ''', (respuesta, fecha_respuesta, telefono_clean))
+                rows_affected = cursor.rowcount
+                conn.commit()
+                
+                if rows_affected > 0:
+                    return True, f"Respuesta actualizada para {rows_affected} registro(s)"
+                else:
+                    return False, "No se encontró el estudiante o ya tiene respuesta"
+            finally:
+                conn.close()
+        
+        try:
+            return self._execute_with_retry(_execute)
         except Exception as e:
             return False, f"Error actualizando respuesta: {str(e)}"
     
@@ -686,19 +726,25 @@ class DatabaseHandler:
         Returns:
             Tuple[bool, str]: (éxito, mensaje con cantidad eliminada)
         """
+        def _execute():
+            with self._lock:  # Lock crítico para operación de borrado
+                conn = self._get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT COUNT(*) as total FROM estudiantes')
+                    count = cursor.fetchone()['total']
+                    cursor.execute('DELETE FROM estudiantes')
+                    conn.commit()
+                    return True, f"{count} estudiante(s) eliminado(s)"
+                finally:
+                    conn.close()
+        
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute('SELECT COUNT(*) as total FROM estudiantes')
-            count = cursor.fetchone()['total']
-            
-            cursor.execute('DELETE FROM estudiantes')
-            conn.commit()
-            conn.close()
-            
-            return True, f"{count} estudiante(s) eliminado(s)"
-            
+            return self._execute_with_retry(_execute)
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e):
+                return False, "Base de datos ocupada. Intenta de nuevo en unos segundos."
+            return False, f"Error vaciando tabla estudiantes: {str(e)}"
         except Exception as e:
             return False, f"Error vaciando tabla estudiantes: {str(e)}"
     
@@ -711,19 +757,25 @@ class DatabaseHandler:
         Returns:
             Tuple[bool, str]: (éxito, mensaje con cantidad eliminada)
         """
+        def _execute():
+            with self._lock:  # Lock crítico para operación de borrado
+                conn = self._get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT COUNT(*) as total FROM bootcamps')
+                    count = cursor.fetchone()['total']
+                    cursor.execute('DELETE FROM bootcamps')
+                    conn.commit()
+                    return True, f"{count} bootcamp(s) eliminado(s)"
+                finally:
+                    conn.close()
+        
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute('SELECT COUNT(*) as total FROM bootcamps')
-            count = cursor.fetchone()['total']
-            
-            cursor.execute('DELETE FROM bootcamps')
-            conn.commit()
-            conn.close()
-            
-            return True, f"{count} bootcamp(s) eliminado(s)"
-            
+            return self._execute_with_retry(_execute)
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e):
+                return False, "Base de datos ocupada. Intenta de nuevo en unos segundos."
+            return False, f"Error vaciando tabla bootcamps: {str(e)}"
         except Exception as e:
             return False, f"Error vaciando tabla bootcamps: {str(e)}"
     
