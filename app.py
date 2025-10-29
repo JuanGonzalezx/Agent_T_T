@@ -46,7 +46,11 @@ DELAY_SECONDS = float(os.getenv("DELAY_SECONDS", "1.5"))
 whatsapp_service = WhatsAppService()
 google_drive_service = GoogleDriveService()
 csv_handler = CSVHandler(CSV_PATH)
-db_handler = DatabaseHandler()  # Nuevo: manejador de SQLite
+
+# SQLite con soporte para disco persistente en Render
+# Si existe /data (volumen en Render), usa ese path; sino, usa local
+DB_PATH = os.path.join(os.getenv('DATA_DIR', '.'), 'whatsapp_tracking.db')
+db_handler = DatabaseHandler(DB_PATH)
 
 # Variables para sincronización automática con Drive
 pending_sync = False
@@ -1184,6 +1188,230 @@ def get_estadisticas():
         
     except Exception as e:
         app.logger.error(f"Error en get_estadisticas: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+# ============================================================================
+# CRUD Endpoints - Editar, Eliminar, Vaciar
+# ============================================================================
+
+@app.route('/api/estudiantes/update-field', methods=['PUT'])
+def update_estudiante_field():
+    """
+    Actualiza UN campo específico de un estudiante.
+    
+    Request Body:
+        {
+            "telefono": "+573001234567",
+            "field": "nombre",
+            "value": "Juan Pérez Actualizado"
+        }
+    
+    Returns:
+        JSON: Resultado de la actualización
+    """
+    try:
+        data = request.get_json()
+        
+        telefono = data.get('telefono')
+        field = data.get('field')
+        value = data.get('value')
+        
+        if not telefono or not field:
+            return jsonify({
+                'success': False,
+                'error': 'Campos requeridos: telefono, field, value'
+            }), 400
+        
+        success, msg = db_handler.update_estudiante_field(telefono, field, value)
+        
+        return jsonify({
+            'success': success,
+            'message' if success else 'error': msg
+        }), 200 if success else 400
+        
+    except Exception as e:
+        app.logger.error(f"Error en update_estudiante_field: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/estudiantes/update-fields', methods=['PUT'])
+def update_estudiante_fields():
+    """
+    Actualiza MÚLTIPLES campos de un estudiante.
+    
+    Request Body:
+        {
+            "telefono": "+573001234567",
+            "fields": {
+                "nombre": "Juan Pérez",
+                "modalidad": "Virtual",
+                "horario": "Lunes a viernes 6pm-10pm"
+            }
+        }
+    
+    Returns:
+        JSON: Resultado de la actualización
+    """
+    try:
+        data = request.get_json()
+        
+        telefono = data.get('telefono')
+        fields = data.get('fields')
+        
+        if not telefono or not fields:
+            return jsonify({
+                'success': False,
+                'error': 'Campos requeridos: telefono, fields'
+            }), 400
+        
+        success, msg = db_handler.update_estudiante_fields(telefono, fields)
+        
+        return jsonify({
+            'success': success,
+            'message' if success else 'error': msg
+        }), 200 if success else 400
+        
+    except Exception as e:
+        app.logger.error(f"Error en update_estudiante_fields: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/estudiantes/delete/<phone>', methods=['DELETE'])
+def delete_estudiante(phone):
+    """
+    Elimina un estudiante por su número de teléfono.
+    
+    Path Parameters:
+        phone (str): Número de teléfono del estudiante
+    
+    Returns:
+        JSON: Resultado de la eliminación
+    """
+    try:
+        success, msg = db_handler.delete_estudiante(phone)
+        
+        return jsonify({
+            'success': success,
+            'message' if success else 'error': msg
+        }), 200 if success else 404
+        
+    except Exception as e:
+        app.logger.error(f"Error en delete_estudiante: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/bootcamps/delete/<bootcamp_id>', methods=['DELETE'])
+def delete_bootcamp(bootcamp_id):
+    """
+    Elimina un bootcamp del catálogo.
+    
+    Path Parameters:
+        bootcamp_id (str): Código del bootcamp
+    
+    Returns:
+        JSON: Resultado de la eliminación
+    """
+    try:
+        success, msg = db_handler.delete_bootcamp(bootcamp_id)
+        
+        return jsonify({
+            'success': success,
+            'message' if success else 'error': msg
+        }), 200 if success else 404
+        
+    except Exception as e:
+        app.logger.error(f"Error en delete_bootcamp: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/estudiantes/clear-all', methods=['DELETE'])
+def clear_all_estudiantes():
+    """
+    ⚠️ PELIGRO: Elimina TODOS los estudiantes de la base de datos.
+    
+    Esta operación no se puede deshacer. Usar con precaución.
+    
+    Returns:
+        JSON: Cantidad de registros eliminados
+    """
+    try:
+        success, msg = db_handler.clear_all_estudiantes()
+        
+        return jsonify({
+            'success': success,
+            'message' if success else 'error': msg
+        }), 200 if success else 500
+        
+    except Exception as e:
+        app.logger.error(f"Error en clear_all_estudiantes: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/bootcamps/clear-all', methods=['DELETE'])
+def clear_all_bootcamps():
+    """
+    ⚠️ PELIGRO: Elimina TODOS los bootcamps de la base de datos.
+    
+    Esta operación no se puede deshacer. Usar con precaución.
+    
+    Returns:
+        JSON: Cantidad de registros eliminados
+    """
+    try:
+        success, msg = db_handler.clear_all_bootcamps()
+        
+        return jsonify({
+            'success': success,
+            'message' if success else 'error': msg
+        }), 200 if success else 500
+        
+    except Exception as e:
+        app.logger.error(f"Error en clear_all_bootcamps: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Error interno: {str(e)}'
+        }), 500
+
+
+@app.route('/api/database/reset', methods=['DELETE'])
+def reset_database():
+    """
+    ⚠️ PELIGRO EXTREMO: Elimina TODO el contenido de la base de datos.
+    
+    Borra estudiantes Y bootcamps. Esta operación no se puede deshacer.
+    
+    Returns:
+        JSON: Resultado del reseteo completo
+    """
+    try:
+        success, msg = db_handler.reset_database()
+        
+        return jsonify({
+            'success': success,
+            'message' if success else 'error': msg
+        }), 200 if success else 500
+        
+    except Exception as e:
+        app.logger.error(f"Error en reset_database: {str(e)}")
         return jsonify({
             'success': False,
             'error': f'Error interno: {str(e)}'

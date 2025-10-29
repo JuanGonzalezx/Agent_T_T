@@ -56,7 +56,7 @@ class DatabaseHandler:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS estudiantes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telefono_e164 TEXT NOT NULL,
+                telefono_e164 TEXT NOT NULL UNIQUE,
                 nombre TEXT NOT NULL,
                 bootcamp_id TEXT,
                 bootcamp_nombre TEXT,
@@ -73,8 +73,7 @@ class DatabaseHandler:
                 respuesta TEXT,
                 fecha_respuesta TIMESTAMP,
                 fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(telefono_e164, bootcamp_id)
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
@@ -186,20 +185,20 @@ class DatabaseHandler:
             # Preparar datos para inserción
             telefono = estudiante_data.get('telefono_e164')
             nombre = estudiante_data.get('nombre')
-            bootcamp_id = estudiante_data.get('bootcamp_id', '')
-            bootcamp_nombre = estudiante_data.get('bootcamp_nombre', '')
-            modalidad = estudiante_data.get('modalidad', '')
-            ingles_inicio = estudiante_data.get('ingles_inicio', '')
-            ingles_fin = estudiante_data.get('ingles_fin', '')
-            inicio_formacion = estudiante_data.get('inicio_formacion', '')
-            horario = estudiante_data.get('horario', '')
-            lugar = estudiante_data.get('lugar', '')
-            opt_in = estudiante_data.get('opt_in', '')
-            estado_envio = estudiante_data.get('estado_envio', '')
-            fecha_envio = estudiante_data.get('fecha_envio', None)
-            message_id = estudiante_data.get('message_id', '')
-            respuesta = estudiante_data.get('respuesta', '')
-            fecha_respuesta = estudiante_data.get('fecha_respuesta', None)
+            bootcamp_id = estudiante_data.get('bootcamp_id') or ''
+            bootcamp_nombre = estudiante_data.get('bootcamp_nombre') or ''
+            modalidad = estudiante_data.get('modalidad') or ''
+            ingles_inicio = estudiante_data.get('ingles_inicio') or ''
+            ingles_fin = estudiante_data.get('ingles_fin') or ''
+            inicio_formacion = estudiante_data.get('inicio_formacion') or ''
+            horario = estudiante_data.get('horario') or ''
+            lugar = estudiante_data.get('lugar') or ''
+            opt_in = estudiante_data.get('opt_in') or ''
+            estado_envio = estudiante_data.get('estado_envio') or ''
+            fecha_envio = estudiante_data.get('fecha_envio') or None
+            message_id = estudiante_data.get('message_id') or ''
+            respuesta = estudiante_data.get('respuesta') or ''
+            fecha_respuesta = estudiante_data.get('fecha_respuesta') or None
             
             cursor.execute('''
                 INSERT INTO estudiantes (
@@ -208,9 +207,10 @@ class DatabaseHandler:
                     horario, lugar, opt_in, estado_envio, fecha_envio,
                     message_id, respuesta, fecha_respuesta
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(telefono_e164, bootcamp_id) 
+                ON CONFLICT(telefono_e164) 
                 DO UPDATE SET
                     nombre = excluded.nombre,
+                    bootcamp_id = excluded.bootcamp_id,
                     bootcamp_nombre = excluded.bootcamp_nombre,
                     modalidad = excluded.modalidad,
                     ingles_inicio = excluded.ingles_inicio,
@@ -219,11 +219,26 @@ class DatabaseHandler:
                     horario = excluded.horario,
                     lugar = excluded.lugar,
                     opt_in = excluded.opt_in,
-                    estado_envio = excluded.estado_envio,
-                    fecha_envio = excluded.fecha_envio,
-                    message_id = excluded.message_id,
-                    respuesta = excluded.respuesta,
-                    fecha_respuesta = excluded.fecha_respuesta,
+                    estado_envio = CASE 
+                        WHEN excluded.estado_envio != '' THEN excluded.estado_envio 
+                        ELSE estudiantes.estado_envio 
+                    END,
+                    fecha_envio = CASE 
+                        WHEN excluded.fecha_envio IS NOT NULL THEN excluded.fecha_envio 
+                        ELSE estudiantes.fecha_envio 
+                    END,
+                    message_id = CASE 
+                        WHEN excluded.message_id != '' THEN excluded.message_id 
+                        ELSE estudiantes.message_id 
+                    END,
+                    respuesta = CASE 
+                        WHEN excluded.respuesta != '' THEN excluded.respuesta 
+                        ELSE estudiantes.respuesta 
+                    END,
+                    fecha_respuesta = CASE 
+                        WHEN excluded.fecha_respuesta IS NOT NULL THEN excluded.fecha_respuesta 
+                        ELSE estudiantes.fecha_respuesta 
+                    END,
                     fecha_actualizacion = CURRENT_TIMESTAMP
             ''', (
                 telefono, nombre, bootcamp_id, bootcamp_nombre,
@@ -466,7 +481,7 @@ class DatabaseHandler:
                     fecha_respuesta = ?,
                     fecha_actualizacion = CURRENT_TIMESTAMP
                 WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
-                  AND respuesta IS NULL OR respuesta = ''
+                  AND (respuesta IS NULL OR respuesta = '')
             ''', (respuesta, fecha_respuesta, telefono_clean))
             
             rows_affected = cursor.rowcount
@@ -480,3 +495,260 @@ class DatabaseHandler:
             
         except Exception as e:
             return False, f"Error actualizando respuesta: {str(e)}"
+    
+    # ==================== CRUD OPERATIONS ====================
+    
+    def update_estudiante_field(
+        self,
+        telefono: str,
+        field: str,
+        value: Any
+    ) -> Tuple[bool, str]:
+        """
+        Actualiza un campo específico de un estudiante.
+        
+        Args:
+            telefono: Número de teléfono del estudiante
+            field: Nombre del campo a actualizar
+            value: Nuevo valor
+            
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje)
+        """
+        # Validar campo permitido
+        allowed_fields = [
+            'nombre', 'bootcamp_id', 'bootcamp_nombre', 'modalidad',
+            'ingles_inicio', 'ingles_fin', 'inicio_formacion', 'horario',
+            'lugar', 'opt_in', 'estado_envio', 'fecha_envio', 'message_id',
+            'respuesta', 'fecha_respuesta'
+        ]
+        
+        if field not in allowed_fields:
+            return False, f"Campo no válido: {field}"
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Normalizar teléfono
+            telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+            
+            query = f'''
+                UPDATE estudiantes
+                SET {field} = ?,
+                    fecha_actualizacion = CURRENT_TIMESTAMP
+                WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+            '''
+            
+            cursor.execute(query, (value, telefono_clean))
+            rows_affected = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            if rows_affected > 0:
+                return True, f"Campo '{field}' actualizado exitosamente"
+            else:
+                return False, f"No se encontró estudiante con teléfono {telefono}"
+            
+        except Exception as e:
+            return False, f"Error actualizando campo: {str(e)}"
+    
+    def update_estudiante_fields(
+        self,
+        telefono: str,
+        fields: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """
+        Actualiza múltiples campos de un estudiante.
+        
+        Args:
+            telefono: Número de teléfono del estudiante
+            fields: Diccionario con {campo: valor}
+            
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje)
+        """
+        allowed_fields = [
+            'nombre', 'bootcamp_id', 'bootcamp_nombre', 'modalidad',
+            'ingles_inicio', 'ingles_fin', 'inicio_formacion', 'horario',
+            'lugar', 'opt_in', 'estado_envio', 'fecha_envio', 'message_id',
+            'respuesta', 'fecha_respuesta'
+        ]
+        
+        # Validar campos
+        invalid_fields = [f for f in fields.keys() if f not in allowed_fields]
+        if invalid_fields:
+            return False, f"Campos no válidos: {', '.join(invalid_fields)}"
+        
+        if not fields:
+            return False, "No se especificaron campos para actualizar"
+        
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Normalizar teléfono
+            telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+            
+            # Construir query dinámicamente
+            set_clauses = [f"{field} = ?" for field in fields.keys()]
+            set_clauses.append("fecha_actualizacion = CURRENT_TIMESTAMP")
+            set_clause = ", ".join(set_clauses)
+            
+            query = f'''
+                UPDATE estudiantes
+                SET {set_clause}
+                WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+            '''
+            
+            values = list(fields.values()) + [telefono_clean]
+            cursor.execute(query, values)
+            
+            rows_affected = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            if rows_affected > 0:
+                return True, f"{len(fields)} campo(s) actualizado(s) exitosamente"
+            else:
+                return False, f"No se encontró estudiante con teléfono {telefono}"
+            
+        except Exception as e:
+            return False, f"Error actualizando campos: {str(e)}"
+    
+    def delete_estudiante(self, telefono: str) -> Tuple[bool, str]:
+        """
+        Elimina un estudiante por su teléfono.
+        
+        Args:
+            telefono: Número de teléfono del estudiante
+            
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje)
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Normalizar teléfono
+            telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+            
+            cursor.execute('''
+                DELETE FROM estudiantes
+                WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+            ''', (telefono_clean,))
+            
+            rows_affected = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            if rows_affected > 0:
+                return True, f"Estudiante eliminado ({rows_affected} registro(s))"
+            else:
+                return False, f"No se encontró estudiante con teléfono {telefono}"
+            
+        except Exception as e:
+            return False, f"Error eliminando estudiante: {str(e)}"
+    
+    def delete_bootcamp(self, bootcamp_id: str) -> Tuple[bool, str]:
+        """
+        Elimina un bootcamp del catálogo.
+        
+        Args:
+            bootcamp_id: Código del bootcamp
+            
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje)
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM bootcamps WHERE bootcamp_id = ?', (bootcamp_id,))
+            rows_affected = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            if rows_affected > 0:
+                return True, f"Bootcamp {bootcamp_id} eliminado"
+            else:
+                return False, f"No se encontró bootcamp {bootcamp_id}"
+            
+        except Exception as e:
+            return False, f"Error eliminando bootcamp: {str(e)}"
+    
+    def clear_all_estudiantes(self) -> Tuple[bool, str]:
+        """
+        Elimina TODOS los estudiantes de la base de datos.
+        
+        ⚠️ PELIGRO: Esta operación no se puede deshacer.
+        
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje con cantidad eliminada)
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT COUNT(*) as total FROM estudiantes')
+            count = cursor.fetchone()['total']
+            
+            cursor.execute('DELETE FROM estudiantes')
+            conn.commit()
+            conn.close()
+            
+            return True, f"{count} estudiante(s) eliminado(s)"
+            
+        except Exception as e:
+            return False, f"Error vaciando tabla estudiantes: {str(e)}"
+    
+    def clear_all_bootcamps(self) -> Tuple[bool, str]:
+        """
+        Elimina TODOS los bootcamps de la base de datos.
+        
+        ⚠️ PELIGRO: Esta operación no se puede deshacer.
+        
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje con cantidad eliminada)
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT COUNT(*) as total FROM bootcamps')
+            count = cursor.fetchone()['total']
+            
+            cursor.execute('DELETE FROM bootcamps')
+            conn.commit()
+            conn.close()
+            
+            return True, f"{count} bootcamp(s) eliminado(s)"
+            
+        except Exception as e:
+            return False, f"Error vaciando tabla bootcamps: {str(e)}"
+    
+    def reset_database(self) -> Tuple[bool, str]:
+        """
+        Elimina TODO el contenido de la base de datos.
+        
+        ⚠️ PELIGRO EXTREMO: Borra estudiantes Y bootcamps.
+        
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje)
+        """
+        try:
+            success1, msg1 = self.clear_all_estudiantes()
+            success2, msg2 = self.clear_all_bootcamps()
+            
+            if success1 and success2:
+                return True, f"Base de datos vaciada: {msg1}, {msg2}"
+            else:
+                errors = []
+                if not success1:
+                    errors.append(msg1)
+                if not success2:
+                    errors.append(msg2)
+                return False, f"Errores: {'; '.join(errors)}"
+            
+        except Exception as e:
+            return False, f"Error reseteando base de datos: {str(e)}"
