@@ -1,5 +1,25 @@
 # API de Consultas SQLite - Documentación
 
+## Resumen de Endpoints
+
+| Método | Endpoint | Descripción | Tipo |
+|--------|----------|-------------|------|
+| **GET** | `/api/estudiantes/all` | Listar todos los estudiantes (paginado) | Consulta |
+| **GET** | `/api/estudiantes/bootcamp/<id>` | Filtrar por bootcamp | Consulta |
+| **GET** | `/api/estudiantes/phone/<phone>` | Buscar por teléfono | Consulta |
+| **GET** | `/api/estudiantes/date-range` | Filtrar por rango de fechas | Consulta |
+| **GET** | `/api/bootcamps` | Listar todos los bootcamps | Consulta |
+| **GET** | `/api/estadisticas` | Estadísticas del sistema | Consulta |
+| **PUT** | `/api/estudiantes/update-field` | Actualizar 1 campo | CRUD |
+| **PUT** | `/api/estudiantes/update-fields` | Actualizar múltiples campos | CRUD |
+| **DELETE** | `/api/estudiantes/delete/<phone>` | Eliminar estudiante | CRUD |
+| **DELETE** | `/api/bootcamps/delete/<id>` | Eliminar bootcamp | CRUD |
+| **DELETE** | `/api/estudiantes/clear-all` | ⚠️ Vaciar tabla estudiantes | CRUD |
+| **DELETE** | `/api/bootcamps/clear-all` | ⚠️ Vaciar tabla bootcamps | CRUD |
+| **DELETE** | `/api/database/reset` | ⚠️ Resetear base de datos completa | CRUD |
+
+---
+
 ## Base de Datos SQLite
 
 El sistema utiliza SQLite como persistencia local para evitar dependencias de sincronización con Google Drive.
@@ -54,7 +74,7 @@ Información completa de estudiantes y sus respuestas.
 - `idx_estudiantes_fecha_envio` (fecha_envio)
 - `idx_estudiantes_respuesta` (respuesta)
 
-**Constraint**: UNIQUE(telefono_e164, bootcamp_id)
+**Constraint**: UNIQUE(telefono_e164) - Un teléfono solo puede tener un registro
 
 ---
 
@@ -274,6 +294,289 @@ GET /api/estadisticas
 
 ---
 
+## Endpoints CRUD - Editar y Eliminar
+
+### 7. Actualizar UN Campo de Estudiante
+**PUT** `/api/estudiantes/update-field`
+
+Actualiza un solo campo de un estudiante identificado por su teléfono.
+
+**Request Body**:
+```json
+{
+  "telefono": "+573001234567",
+  "field": "nombre",
+  "value": "Juan Pérez Actualizado"
+}
+```
+
+**Campos permitidos para actualizar**:
+- `nombre`, `bootcamp_id`, `bootcamp_nombre`, `modalidad`
+- `ingles_inicio`, `ingles_fin`, `inicio_formacion`, `horario`
+- `lugar`, `opt_in`, `estado_envio`, `fecha_envio`, `message_id`
+- `respuesta`, `fecha_respuesta`
+
+**Ejemplo con curl**:
+```bash
+curl -X PUT https://agent-t-t.onrender.com/api/estudiantes/update-field \
+  -H "Content-Type: application/json" \
+  -d '{
+    "telefono": "+573001234567",
+    "field": "modalidad",
+    "value": "Virtual"
+  }'
+```
+
+**Respuesta Exitosa (200)**:
+```json
+{
+  "success": true,
+  "message": "Campo 'modalidad' actualizado exitosamente"
+}
+```
+
+**Respuesta Error (400)**:
+```json
+{
+  "success": false,
+  "error": "Campo no válido: campo_invalido"
+}
+```
+
+---
+
+### 8. Actualizar MÚLTIPLES Campos de Estudiante
+**PUT** `/api/estudiantes/update-fields`
+
+Actualiza varios campos de un estudiante en una sola operación.
+
+**Request Body**:
+```json
+{
+  "telefono": "+573001234567",
+  "fields": {
+    "nombre": "Juan Pérez",
+    "modalidad": "Virtual",
+    "horario": "Lunes a viernes 6pm-10pm",
+    "bootcamp_nombre": "Data Science Avanzado"
+  }
+}
+```
+
+**Ejemplo con curl**:
+```bash
+curl -X PUT https://agent-t-t.onrender.com/api/estudiantes/update-fields \
+  -H "Content-Type: application/json" \
+  -d '{
+    "telefono": "+573001234567",
+    "fields": {
+      "modalidad": "Híbrido",
+      "horario": "Sábados 8am-12pm",
+      "bootcamp_id": "DS_2025_01"
+    }
+  }'
+```
+
+**Respuesta Exitosa (200)**:
+```json
+{
+  "success": true,
+  "message": "3 campo(s) actualizado(s) exitosamente"
+}
+```
+
+**Respuesta Error (400)**:
+```json
+{
+  "success": false,
+  "error": "Campos no válidos: campo1, campo2"
+}
+```
+
+---
+
+### 9. Eliminar Un Estudiante
+**DELETE** `/api/estudiantes/delete/<phone>`
+
+Elimina un estudiante específico por su número de teléfono.
+
+**Path Parameters**:
+- `phone` (string): Número de teléfono (con o sin +)
+
+**Ejemplo**:
+```bash
+curl -X DELETE https://agent-t-t.onrender.com/api/estudiantes/delete/573001234567
+```
+
+**Respuesta Exitosa (200)**:
+```json
+{
+  "success": true,
+  "message": "Estudiante eliminado (1 registro(s))"
+}
+```
+
+**Respuesta Error (404)**:
+```json
+{
+  "success": false,
+  "error": "No se encontró estudiante con teléfono +573001234567"
+}
+```
+
+---
+
+### 10. Eliminar Un Bootcamp
+**DELETE** `/api/bootcamps/delete/<bootcamp_id>`
+
+Elimina un bootcamp del catálogo.
+
+**Path Parameters**:
+- `bootcamp_id` (string): Código del bootcamp
+
+**Ejemplo**:
+```bash
+curl -X DELETE https://agent-t-t.onrender.com/api/bootcamps/delete/IA_2024_01
+```
+
+**Respuesta Exitosa (200)**:
+```json
+{
+  "success": true,
+  "message": "Bootcamp IA_2024_01 eliminado"
+}
+```
+
+**Respuesta Error (404)**:
+```json
+{
+  "success": false,
+  "error": "No se encontró bootcamp IA_2024_01"
+}
+```
+
+---
+
+### 11. Vaciar Tabla de Estudiantes
+**DELETE** `/api/estudiantes/clear-all`
+
+⚠️ **PELIGRO**: Elimina TODOS los estudiantes de la base de datos. Esta operación no se puede deshacer.
+
+**Ejemplo**:
+```bash
+curl -X DELETE https://agent-t-t.onrender.com/api/estudiantes/clear-all
+```
+
+**Respuesta Exitosa (200)**:
+```json
+{
+  "success": true,
+  "message": "150 estudiante(s) eliminado(s)"
+}
+```
+
+**Respuesta Error (500)**:
+```json
+{
+  "success": false,
+  "error": "Base de datos ocupada. Intenta de nuevo en unos segundos."
+}
+```
+
+---
+
+### 12. Vaciar Tabla de Bootcamps
+**DELETE** `/api/bootcamps/clear-all`
+
+⚠️ **PELIGRO**: Elimina TODOS los bootcamps de la base de datos. Esta operación no se puede deshacer.
+
+**Ejemplo**:
+```bash
+curl -X DELETE https://agent-t-t.onrender.com/api/bootcamps/clear-all
+```
+
+**Respuesta Exitosa (200)**:
+```json
+{
+  "success": true,
+  "message": "4 bootcamp(s) eliminado(s)"
+}
+```
+
+---
+
+### 13. Resetear Base de Datos Completa
+**DELETE** `/api/database/reset`
+
+⚠️ **PELIGRO EXTREMO**: Elimina TODO el contenido de la base de datos (estudiantes + bootcamps). Esta operación no se puede deshacer.
+
+**Ejemplo**:
+```bash
+curl -X DELETE https://agent-t-t.onrender.com/api/database/reset
+```
+
+**Respuesta Exitosa (200)**:
+```json
+{
+  "success": true,
+  "message": "Base de datos vaciada: 150 estudiante(s) eliminado(s), 4 bootcamp(s) eliminado(s)"
+}
+```
+
+---
+
+## Ejemplos de Uso Completos
+
+### Ejemplo 1: Actualizar modalidad de un estudiante
+```bash
+curl -X PUT https://agent-t-t.onrender.com/api/estudiantes/update-field \
+  -H "Content-Type: application/json" \
+  -d '{
+    "telefono": "573001234567",
+    "field": "modalidad",
+    "value": "Híbrido"
+  }'
+```
+
+### Ejemplo 2: Actualizar varios campos a la vez
+```bash
+curl -X PUT https://agent-t-t.onrender.com/api/estudiantes/update-fields \
+  -H "Content-Type: application/json" \
+  -d '{
+    "telefono": "573001234567",
+    "fields": {
+      "bootcamp_id": "DS_2025_01",
+      "bootcamp_nombre": "Data Science 2025",
+      "modalidad": "Presencial",
+      "horario": "Lunes a Viernes 2pm-6pm"
+    }
+  }'
+```
+
+### Ejemplo 3: Eliminar estudiante específico
+```bash
+curl -X DELETE https://agent-t-t.onrender.com/api/estudiantes/delete/573001234567
+```
+
+### Ejemplo 4: Vaciar base de datos y recargar desde CSV
+```bash
+# Paso 1: Resetear base de datos
+curl -X DELETE https://agent-t-t.onrender.com/api/database/reset
+
+# Paso 2: Recargar desde CSV (localmente)
+python recreate_db.py
+
+# O usar el endpoint de Google Drive
+curl -X POST https://agent-t-t.onrender.com/api/google/upload \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fileId": "tu_google_drive_file_id",
+    "accessToken": "tu_access_token"
+  }'
+```
+
+---
+
 ## Flujo de Sincronización
 
 ### CSV ↔ SQLite
@@ -313,6 +616,43 @@ Todos los endpoints retornan el siguiente formato en caso de error:
 }
 ```
 
+### Errores Comunes
+
+| Error | Causa | Solución |
+|-------|-------|----------|
+| `Campo no válido: X` | Campo no permitido para actualización | Verificar lista de campos permitidos |
+| `No se encontró estudiante con teléfono X` | Teléfono no existe en DB | Verificar formato del teléfono |
+| `Base de datos ocupada. Intenta de nuevo...` | Operación concurrente en progreso | Esperar 1-2 segundos y reintentar |
+| `Campos requeridos: X, Y` | Faltan campos obligatorios | Incluir todos los campos requeridos |
+
+---
+
+## Validaciones y Reglas de Negocio
+
+### Prevención de Duplicados
+- La tabla `estudiantes` tiene un constraint **UNIQUE** en `telefono_e164`
+- Si intentas insertar un teléfono duplicado, se **actualiza** el registro existente (UPSERT)
+- **NO** se crean registros duplicados
+
+### Lógica de Actualización Inteligente
+Cuando se hace UPSERT, solo se actualizan los campos que **no están vacíos**:
+
+```sql
+estado_envio = CASE 
+    WHEN excluded.estado_envio != '' THEN excluded.estado_envio 
+    ELSE estudiantes.estado_envio 
+END
+```
+
+Esto evita sobrescribir datos existentes con valores vacíos.
+
+### Normalización de Teléfonos
+Los endpoints aceptan teléfonos con o sin el prefijo `+`:
+- ✅ `+573001234567`
+- ✅ `573001234567`
+
+Internamente se normalizan para búsqueda.
+
 ---
 
 ## Consideraciones de Rendimiento
@@ -329,6 +669,26 @@ El endpoint `/api/estudiantes/all` implementa paginación para evitar sobrecarga
 
 ### Transacciones
 Todas las operaciones de escritura utilizan transacciones ACID de SQLite para garantizar consistencia.
+
+### Manejo de Concurrencia
+El sistema implementa **3 capas de protección** contra bloqueos de base de datos:
+
+1. **Write-Ahead Logging (WAL)**:
+   - Permite lecturas mientras se escribe
+   - Múltiples lectores simultáneos sin bloqueos
+   - Mejor rendimiento en operaciones concurrentes
+
+2. **Timeouts Configurados**:
+   - Timeout de 30 segundos para operaciones bloqueadas
+   - Autocommit mode para transacciones rápidas
+   - `busy_timeout` de 30 segundos
+
+3. **Sistema de Reintentos**:
+   - Reintentos automáticos con backoff exponencial (0.5s, 1s, 1.5s)
+   - Thread locks en operaciones críticas (clear-all, reset)
+   - Mensajes informativos: "Base de datos ocupada. Intenta de nuevo en unos segundos."
+
+**Resultado**: El webhook puede recibir respuestas mientras se ejecutan operaciones de borrado masivo sin errores de "database is locked".
 
 ---
 
@@ -385,10 +745,19 @@ for _, row in df.iterrows():
 - ✅ Altamente optimizado para lecturas
 - ✅ Incluido en Python (sin instalación)
 - ✅ Perfecto para despliegue en Render con volumen persistente
+- ✅ WAL mode para operaciones concurrentes
 
 ### Limitaciones
-- ⚠️ No soporta múltiples escritores concurrentes
+- ⚠️ Optimizado para lecturas concurrentes, escrituras serializadas
 - ⚠️ Limitado a ~1TB de datos (más que suficiente para este caso)
+- ✅ Bloqueos manejados con reintentos automáticos
+
+### Protección contra Bloqueos
+El sistema implementa:
+- **WAL mode**: Lecturas sin bloqueos durante escrituras
+- **Timeouts**: 30 segundos de espera antes de fallar
+- **Reintentos**: 3 intentos con backoff exponencial
+- **Thread locks**: Serialización de operaciones críticas
 
 ### Backup
 El archivo `whatsapp_tracking.db` debe incluirse en los backups regulares del sistema junto con `bd_envio.csv`.
