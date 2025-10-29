@@ -311,8 +311,8 @@ def send_batch_messages():
             # {{1}}, {{2}}, {{3}}, {{4}}, {{5}}, {{6}}, {{7}}, {{8}}
             parameters = [
                 str(row.get('nombre', '')),
-                str(row.get('bootcamp_nombre', '')),
                 str(row.get('modalidad', '')),
+                str(row.get('bootcamp_nombre', '')),
                 str(row.get('ingles_inicio', '')),
                 str(row.get('ingles_fin', '')),
                 str(row.get('inicio_formacion', '')),
