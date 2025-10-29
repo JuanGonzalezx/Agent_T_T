@@ -9,6 +9,7 @@ manejo consistente y reutilizable de los datos.
 import pandas as pd
 from datetime import datetime
 from typing import Tuple, List, Dict, Any, Optional
+from utils.data_normalizer import add_tracking_columns
 
 
 class CSVHandler:
@@ -29,7 +30,6 @@ class CSVHandler:
         """
         self.csv_path = csv_path
         self._required_columns = ['telefono_e164']
-        self._tracking_columns = ['estado_envio_simple', 'fecha_envio_simple', 'message_id_simple']
     
     def load_csv(self) -> Tuple[bool, pd.DataFrame, str]:
         """
@@ -49,11 +49,8 @@ class CSVHandler:
             if missing_cols:
                 return False, None, f"Columnas faltantes: {', '.join(missing_cols)}"
             
-            # Crear columnas de seguimiento si no existen
-            # Esto permite trabajar con CSVs nuevos sin preparación previa
-            for col in self._tracking_columns:
-                if col not in df.columns:
-                    df[col] = ''
+            # Crear columnas de seguimiento si no existen usando la función centralizada
+            df = add_tracking_columns(df)
             
             return True, df, f"CSV cargado exitosamente: {len(df)} registros"
             
@@ -105,7 +102,7 @@ class CSVHandler:
         
         Un contacto está pendiente si:
         1. Tiene opt_in=TRUE (si la columna existe)
-        2. No ha sido enviado anteriormente (estado_envio_simple != 'sent')
+        2. No ha sido enviado anteriormente (estado_envio != 'sent')
         
         Este filtrado evita reenvíos no deseados y respeta las preferencias
         de comunicación de los usuarios.
@@ -128,7 +125,7 @@ class CSVHandler:
             
             # Evitar reenvíos a contactos ya procesados
             # Esto previene spam y duplicación de mensajes
-            estado = str(row.get('estado_envio_simple', '')).strip().lower()
+            estado = str(row.get('estado_envio', '')).strip().lower()
             if estado == 'sent':
                 continue
             
@@ -159,13 +156,13 @@ class CSVHandler:
             pd.DataFrame: DataFrame actualizado
         """
         if success:
-            df.at[idx, 'estado_envio_simple'] = 'sent'
-            df.at[idx, 'message_id_simple'] = result
+            df.at[idx, 'estado_envio'] = 'sent'
+            df.at[idx, 'message_id'] = result
         else:
-            df.at[idx, 'estado_envio_simple'] = 'error'
+            df.at[idx, 'estado_envio'] = 'error'
         
         # El timestamp permite auditoría y análisis temporal de envíos
-        df.at[idx, 'fecha_envio_simple'] = datetime.now().isoformat()
+        df.at[idx, 'fecha_envio'] = datetime.now().isoformat()
         
         return df
     
@@ -182,7 +179,8 @@ class CSVHandler:
         return {
             'telefono': row.get('telefono_e164', ''),
             'nombre': row.get('nombre', 'Usuario'),
-            'bootcamp': row.get('bootcamp', ''),
+            'bootcamp_id': row.get('bootcamp_id', ''),
+            'bootcamp_nombre': row.get('bootcamp_nombre', ''),
             'modalidad': row.get('modalidad', ''),
             'horario': row.get('horario', ''),
             'lugar': row.get('lugar', '')
@@ -202,8 +200,8 @@ class CSVHandler:
             Dict[str, int]: Diccionario con estadísticas
         """
         total = len(df)
-        sent = len(df[df['estado_envio_simple'] == 'sent'])
-        errors = len(df[df['estado_envio_simple'] == 'error'])
+        sent = len(df[df['estado_envio'] == 'sent'])
+        errors = len(df[df['estado_envio'] == 'error'])
         pending = total - sent - errors
         
         return {
@@ -257,12 +255,8 @@ class CSVHandler:
         Returns:
             Tuple[bool, pd.DataFrame, str]: (éxito, dataframe_actualizado, mensaje)
         """
-        # Crear columnas de respuesta si no existen
-        # Esto permite trabajar con CSVs que no tienen estas columnas
-        response_columns = ['respuesta', 'fecha_respuesta', 'respuesta_id']
-        for col in response_columns:
-            if col not in df.columns:
-                df[col] = ''
+        # Asegurar que existan todas las columnas de tracking usando función centralizada
+        df = add_tracking_columns(df)
         
         # Buscar el contacto por teléfono
         idx = self.find_contact_by_phone(df, phone)
@@ -273,7 +267,5 @@ class CSVHandler:
         # Actualizar la respuesta
         df.at[idx, 'respuesta'] = response_text
         df.at[idx, 'fecha_respuesta'] = datetime.now().isoformat()
-        if button_id:
-            df.at[idx, 'respuesta_id'] = button_id
         
         return True, df, f"Respuesta registrada para {df.at[idx, 'nombre']}"

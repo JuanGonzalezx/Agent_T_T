@@ -117,12 +117,11 @@ def add_tracking_columns(df: pd.DataFrame) -> pd.DataFrame:
     de los contactos en campañas de mensajería.
     
     Columnas añadidas:
-    - estado_envio_simple: 'pending' o 'sent'
-    - fecha_envio_simple: Timestamp del envío
-    - message_id_simple: ID del mensaje de WhatsApp
+    - estado_envio: 'pending' o 'sent'
+    - fecha_envio: Timestamp del envío
+    - message_id: ID del mensaje de WhatsApp
     - respuesta: Respuesta del contacto ("Sí" o "No")
     - fecha_respuesta: Timestamp de la respuesta
-    - respuesta_id: ID del mensaje de respuesta
     
     Args:
         df: DataFrame original
@@ -131,8 +130,8 @@ def add_tracking_columns(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame: DataFrame con columnas de tracking
     """
     tracking_cols = [
-        'estado_envio_simple', 'fecha_envio_simple', 'message_id_simple',
-        'respuesta', 'fecha_respuesta', 'respuesta_id'
+        'estado_envio', 'fecha_envio', 'message_id',
+        'respuesta', 'fecha_respuesta'
     ]
     
     for col in tracking_cols:

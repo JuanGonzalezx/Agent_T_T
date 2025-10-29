@@ -5,21 +5,10 @@
 ## 🔄 Tareas Pendientes
 
 ### 🔧 Backend & Servicios
-- [ ] **Revisar funciones repetidas** en `csv_handler` y `data_normalizer`
-  - Identificar código duplicado
-  - Refactorizar para evitar redundancia
-  
 - [ ] **Crear botón y configurar envío masivo** en el backend
   - Implementar endpoint para envío masivo
   - Validar datos antes del envío
   - Manejo de errores y respuestas
-
-
-### 📊 Datos
-- [ ] **Revisar y normalizar campos** del `bd_envio.csv`
-  - Verificar consistencia de datos
-  - Normalizar formato de campos
-  - Eliminar datos duplicados o inválidos
 
 ### 🎨 Frontend
 - [ ] **Revisar detalles de frontend**
@@ -27,8 +16,7 @@
   - Validar funcionalidad de botones
   - Responsive design
 
-
-  
+### 📱 WhatsApp & Meta
 - [ ] **Actualizar o añadir nuevo número** de Talento Tech
   - Configurar nuevo número en Meta
   - Actualizar credenciales en el sistema
@@ -43,18 +31,29 @@
 
 ## ✅ Tareas Completadas
 
-_(Mueve aquí las tareas cuando las completes)_
+- [x] **Revisar funciones repetidas** en `csv_handler` y `data_normalizer`
+  - ✅ Identificado código duplicado en `add_tracking_columns()`
+  - ✅ Refactorizado para usar función centralizada de `data_normalizer`
+  - ✅ Eliminada variable `_tracking_columns` innecesaria
 
--### 📱 WhatsApp & Meta
-- [✅] **Revisar plantillas** en Meta Developer
-  - Verificar plantillas activas
-  - Actualizar mensajes si es necesario
+- [x] **Revisar y normalizar campos** del `bd_envio.csv`
+  - ✅ Eliminadas columnas obsoletas: `estado_envio`, `fecha_envio`, `message_sid`
+  - ✅ Renombradas columnas: `_simple` removido (estado_envio, fecha_envio, message_id)
+  - ✅ Eliminada columna `respuesta_id` (no utilizada)
+  - ✅ Añadida columna `bootcamp_id` después de `nombre`
+  - ✅ Renombrada columna `bootcamp` a `bootcamp_nombre`
+  - ✅ Actualizado código en `csv_handler.py`, `data_normalizer.py` y `app.py`
 
-
-- [✅] **Configurar webhook** para actualizar dinámicamente el archivo
+- [x] **Configurar webhook** para actualizar dinámicamente el archivo
   - Implementar webhook de Google Drive
   - Actualizar `fileId` de forma automática
   - Validar sincronización
 
+### 📱 WhatsApp & Meta
+- [x] **Revisar plantillas** en Meta Developer
+  - Verificar plantillas activas
+  - Actualizar mensajes si es necesario
+
+---
   
 **Última actualización:** 28 de octubre, 2025

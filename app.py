@@ -311,7 +311,7 @@ def send_batch_messages():
             # {{1}}, {{2}}, {{3}}, {{4}}, {{5}}, {{6}}, {{7}}, {{8}}
             parameters = [
                 str(row.get('nombre', '')),
-                str(row.get('bootcamp', '')),
+                str(row.get('bootcamp_nombre', '')),
                 str(row.get('modalidad', '')),
                 str(row.get('ingles_inicio', '')),
                 str(row.get('ingles_fin', '')),
@@ -468,7 +468,7 @@ def upload_from_google():
     2. Selección de archivo (Sheet/CSV/XLSX) desde Drive
     3. Descarga del contenido del archivo
     4. Normalización de columnas y teléfonos
-    5. Añade columnas de tracking (respuesta, fecha_respuesta, respuesta_id)
+    5. Añade columnas de tracking (estado_envio, fecha_envio, message_id, respuesta, fecha_respuesta)
     6. Guarda en bd_envio.csv local
     7. Actualiza el archivo original en Drive con las nuevas columnas
     
@@ -553,7 +553,7 @@ def upload_from_google():
         df = clean_phone_numbers(df)
         app.logger.info("✅ Números de teléfono limpiados")
         
-        # 6. Añadir columnas de tracking (respuesta, fecha_respuesta, respuesta_id)
+        # 6. Añadir columnas de tracking (estado_envio, fecha_envio, message_id, respuesta, fecha_respuesta)
         df = add_tracking_columns(df)
         app.logger.info("✅ Columnas de tracking añadidas")
         
