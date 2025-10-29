@@ -708,179 +708,165 @@ def send_template():
 def webhook():
     """
     Webhook para recibir notificaciones de WhatsApp.
-    
-    Este endpoint maneja dos tipos de peticiones:
-    1. GET: Verificación del webhook por parte de Meta (una sola vez)
-    2. POST: Recepción de eventos (mensajes, respuestas, etc.)
-    
-    El webhook captura las respuestas de los usuarios y las registra en el CSV,
-    permitiendo trazabilidad completa de las conversaciones.
-    
-    Returns:
-        - GET: Challenge token para verificación
-        - POST: Status 200 para confirmar recepción
+
+    Maneja:
+    1) GET: verificación del webhook (una sola vez).
+    2) POST: eventos de mensajes (texto, botones de plantilla, interactivos, etc.).
     """
     if request.method == 'GET':
-        # Verificación del webhook por parte de Meta
-        # Esto solo ocurre una vez durante la configuración inicial
         verify_token = os.getenv('VERIFY_TOKEN', 'mi_token_secreto')
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
-        
+
         if mode == 'subscribe' and token == verify_token:
             app.logger.info('Webhook verificado exitosamente')
             return challenge, 200
         else:
             app.logger.warning('Fallo en la verificación del webhook')
             return 'Forbidden', 403
-    
+
     elif request.method == 'POST':
-        # Recepción de eventos de WhatsApp
         try:
             body = request.get_json()
-            
-            # Log del evento recibido para debugging
             app.logger.info(f"Webhook recibido: {body}")
-            
-            # Verificar que el evento tenga la estructura esperada
-            # WhatsApp envía eventos en este formato específico
+
             if not body or 'entry' not in body:
                 return jsonify({'status': 'ok'}), 200
-            
-            # Procesar cada entrada (normalmente es una sola)
+
             for entry in body.get('entry', []):
                 for change in entry.get('changes', []):
                     value = change.get('value', {})
-                    
-                    # Verificar si hay mensajes en el evento
                     messages = value.get('messages', [])
                     if not messages:
                         continue
-                    
-                    # Procesar cada mensaje
+
                     for message in messages:
-                        # Extraer información del remitente
                         from_number = message.get('from', '')
                         message_type = message.get('type', '')
-                        
+                        context = message.get('context', {}) or {}
+
                         response_text = None
                         button_id = None
-                        
-                        # Manejar diferentes tipos de respuesta
-                        # Los botones interactivos envían un tipo especial
-                        if message_type == 'interactive':
-                            interactive = message.get('interactive', {})
-                            button_reply = interactive.get('button_reply', {})
-                            button_id = button_reply.get('id', '')
-                            response_text = button_reply.get('title', '')
-                        
-                        # Manejar respuestas de texto plano
+
+                        # (1) Botones de PLANTILLA (quick replies de plantilla)
+                        if message_type == 'button':
+                            btn = message.get('button', {}) or {}
+                            response_text = btn.get('text', '')
+                            # 'payload' puede venir o no; si no, usamos el texto como fallback
+                            button_id = btn.get('payload') or response_text
+                            app.logger.info(f"🟢 Botón de plantilla - payload: {button_id}, texto: {response_text}")
+
+                        # (2) Interactivos enviados como 'interactive' (no-plantilla)
+                        elif message_type == 'interactive':
+                            interactive = message.get('interactive', {}) or {}
+                            itype = interactive.get('type')
+
+                            if itype == 'button_reply':
+                                br = interactive.get('button_reply', {}) or {}
+                                button_id = br.get('id') or br.get('payload')
+                                response_text = br.get('title', '')
+                                app.logger.info(f"🟦 Botón interactivo - id: {button_id}, texto: {response_text}")
+
+                            elif itype == 'list_reply':
+                                lr = interactive.get('list_reply', {}) or {}
+                                button_id = lr.get('id')
+                                response_text = lr.get('title', '')
+                                app.logger.info(f"🟪 Lista interactiva - id: {button_id}, texto: {response_text}")
+
+                            # (Opcional) Respuestas de Flows/NFM (si las usas)
+                            elif itype == 'nfm_reply':
+                                nfm = interactive.get('nfm_reply', {}) or {}
+                                button_id = f"flow:{nfm.get('name','')}"
+                                response_text = nfm.get('response_json')  # JSON de respuestas del flow
+                                app.logger.info(f"🟨 Flow reply - id: {button_id}, payload: {response_text}")
+
+                        # (3) Texto escrito por el usuario
                         elif message_type == 'text':
                             response_text = message.get('text', {}).get('body', '')
-                        
-                        # Si tenemos una respuesta, procesarla
+                            if context:
+                                app.logger.info(f"💬 Texto (con contexto) - {response_text} | reply_to={context.get('id')}")
+                            else:
+                                app.logger.info(f"💬 Texto - {response_text}")
+
+                        # ---- Normalización/validación de respuesta y guardado ----
                         if response_text and from_number:
-                            # Normalizar la respuesta para comparación
-                            # Esto permite detectar "SI", "si", "Si", "sí", "SÍ", etc.
-                            response_normalized = response_text.strip().lower()
-                            
-                            # Variantes válidas de "Sí" y "No"
-                            # Incluye con y sin tilde, diferentes capitalizaciones
+                            response_normalized = str(response_text).strip().lower()
+
                             valid_yes = ['si', 'sí', 'yes', 'y']
                             valid_no = ['no', 'n']
-                            
-                            # Verificar si la respuesta es válida
-                            is_valid_response = (
-                                response_normalized in valid_yes or 
-                                response_normalized in valid_no
-                            )
-                            
+                            is_valid_response = (response_normalized in valid_yes or
+                                                 response_normalized in valid_no)
+
                             if is_valid_response:
-                                # Cargar CSV
+                                standardized_response = "Sí" if response_normalized in valid_yes else "No"
+
                                 success, df, msg = csv_handler.load_csv()
                                 if not success:
                                     app.logger.error(f"Error cargando CSV: {msg}")
                                     continue
-                                
-                                # Determinar la respuesta normalizada para guardar
-                                # Esto estandariza el formato en el CSV
-                                if response_normalized in valid_yes:
-                                    standardized_response = "Sí"
-                                else:
-                                    standardized_response = "No"
-                                
-                                # Actualizar respuesta en el CSV
+
+                                # Preferimos guardar algún identificador del "clic" o el id del mensaje respondido
+                                correlation_id = button_id or context.get('id', '')
+
                                 success, df, msg = csv_handler.update_response(
                                     df,
                                     from_number,
                                     standardized_response,
-                                    button_id
+                                    correlation_id
                                 )
-                                
+
                                 if success:
-                                    # Guardar cambios
                                     csv_handler.save_csv(df)
                                     app.logger.info(f"✅ {msg} - Respuesta: '{standardized_response}'")
-                                    
-                                    # Marcar que hay cambios pendientes para sincronizar con Drive
-                                    global pending_sync
-                                    pending_sync = True
-                                    app.logger.info("🔄 Cambios pendientes marcados para sincronización con Drive")
-                                    
-                                    # Enviar mensaje de agradecimiento
-                                    # Esto mejora la experiencia del usuario y confirma la recepción
-                                    thank_you_message = (
-                                        "¡Muchas gracias por tu respuesta! 🙏\n\n"
-                                        "Hemos registrado tu confirmación correctamente. "
-                                        "Si tienes alguna pregunta adicional, no dudes en contactarnos. "
-                                        "¡Que tengas un excelente día! "
-                                    )
-                                    
-                                    # Enviar mensaje de agradecimiento de forma asíncrona
-                                    # No bloqueamos el webhook si este envío falla
+
+                                    # Marcar pending sync (si usas este flag global)
+                                    try:
+                                        global pending_sync
+                                        pending_sync = True
+                                        app.logger.info("🔄 Cambios pendientes marcados para sincronización con Drive")
+                                    except NameError:
+                                        # Si no usas pending_sync en tu app, puedes ignorar este bloque
+                                        pass
+
+                                    # Agradecimiento (no bloquear si falla)
                                     try:
                                         whatsapp_service.send_text_message(
                                             from_number,
-                                            thank_you_message
+                                            "¡Muchas gracias por tu respuesta! 🙏\n\n"
+                                            "Hemos registrado tu confirmación correctamente. "
+                                            "Si tienes alguna pregunta adicional, no dudes en contactarnos. "
+                                            "¡Que tengas un excelente día!"
                                         )
                                         app.logger.info(f"📨 Mensaje de agradecimiento enviado a {from_number}")
                                     except Exception as e:
                                         app.logger.error(f"Error enviando agradecimiento: {str(e)}")
+
                                 else:
                                     app.logger.warning(f"⚠️ {msg}")
+
                             else:
-                                # Respuesta no válida - no actualizar CSV
-                                # Esto evita contaminar los datos con respuestas irrelevantes
-                                app.logger.info(
-                                    f"ℹ️ Respuesta no válida recibida de {from_number}: '{response_text}'"
-                                )
-                                
-                                # Enviar mensaje indicando que solo se aceptan "Sí" o "No"
-                                invalid_response_message = (
-                                    "⚠️ Solo se aceptan respuestas de *Sí* o *No*.\n\n"
-                                    "Por favor, responde con:\n"
-                                    "• *Sí* (o Si, yes, y)\n"
-                                    "• *No* (o no, n)\n\n"
-                                    "Gracias por tu comprensión. "
-                                )
-                                
+                                # Respuesta no válida → instrucción
+                                app.logger.info(f"ℹ️ Respuesta no válida de {from_number}: '{response_text}'")
                                 try:
                                     whatsapp_service.send_text_message(
                                         from_number,
-                                        invalid_response_message
+                                        "⚠️ Solo se aceptan respuestas de *Sí* o *No*.\n\n"
+                                        "Por favor, responde con:\n"
+                                        "• *Sí* (o Si, yes, y)\n"
+                                        "• *No* (o no, n)\n\n"
+                                        "Gracias por tu comprensión."
                                     )
                                     app.logger.info(f"📨 Mensaje de validación enviado a {from_number}")
                                 except Exception as e:
                                     app.logger.error(f"Error enviando mensaje de validación: {str(e)}")
-            
-            # Siempre retornar 200 para confirmar recepción
-            # Esto evita que WhatsApp reintente enviar el evento
+
+            # Confirmar recepción para evitar reintentos de Meta
             return jsonify({'status': 'ok'}), 200
-        
+
         except Exception as e:
             app.logger.error(f"Error procesando webhook: {str(e)}")
-            # Aún así retornar 200 para evitar reintentos
+            # Aun con error respondemos 200 para evitar reintentos
             return jsonify({'status': 'ok'}), 200
 
 
