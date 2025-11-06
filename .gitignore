@@ -6,6 +6,22 @@
 # Archivos de backup del CSV
 bd_envio_backup_*.csv
 
+# Archivos de test (no versionar)
+test_*.py
+
+# Base de datos SQLite local (no versionar - usar Turso en producción)
+whatsapp_tracking.db
+bd_envio.db
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Backups de base de datos (si se generan localmente)
+backups/
+*.db.backup
+
 # Entorno virtual de Python
 .venv/
 .venv311/

@@ -118,6 +118,31 @@ def sync_to_drive_if_needed():
         app.logger.error(traceback.format_exc())
 
 
+@app.route('/', methods=['GET'])
+def index():
+    """
+    Ruta raíz del servidor - Información general de la API.
+    
+    Returns:
+        JSON: Información sobre la API y endpoints disponibles
+    """
+    return jsonify({
+        'service': 'WhatsApp Messaging API Server',
+        'version': '2.0',
+        'status': 'running',
+        'database': 'Turso (cloud)' if db_handler.use_turso else 'SQLite (local)',
+        'endpoints': {
+            'health': '/health',
+            'estudiantes': '/api/estudiantes/all',
+            'bootcamps': '/api/bootcamps',
+            'estadisticas': '/api/estadisticas',
+            'send_message': '/api/messages/send-simple',
+            'send_batch': '/api/messages/send-batch',
+            'webhook': '/webhook'
+        }
+    }), 200
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """
