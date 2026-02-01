@@ -62,60 +62,50 @@ cached_mime_type = None
 def sync_to_drive_if_needed():
     """
     Sincroniza bd_envio.csv a Google Drive si hay cambios pendientes.
-    Esta función es llamada por el scheduler cada 5 minutos.
+    Esta funcion es llamada por el scheduler cada 5 minutos.
     Solo sincroniza si pending_sync es True, optimizando llamadas a la API.
     """
     global pending_sync, cached_file_id, cached_access_token, cached_mime_type
     
-    # Verificar si hay cambios pendientes
     if not pending_sync:
-        app.logger.info("⏭️ Sync omitido: No hay cambios pendientes")
         return
     
-    # Verificar credenciales cacheadas
     if not cached_file_id or not cached_access_token:
-        app.logger.warning("⚠️ Sync omitido: No hay credenciales de Google cacheadas")
+        app.logger.warning("[SYNC] Sin credenciales de Google cacheadas")
         return
     
     try:
-        app.logger.info("🔄 Iniciando sincronización automática con Drive...")
-        
-        # Cargar CSV local
         success, df, msg = csv_handler.load_csv()
         if not success:
-            app.logger.error(f"❌ Error cargando CSV: {msg}")
+            app.logger.error(f"[SYNC] CSV load failed - {msg}")
             return
         
-        # Actualizar en Drive según el tipo de archivo
         update_success = False
-        update_message = ""
         
         if cached_mime_type == 'application/vnd.google-apps.spreadsheet':
-            update_success, update_message = google_drive_service.update_google_sheet(
+            update_success, _ = google_drive_service.update_google_sheet(
                 cached_file_id, cached_access_token, df
             )
         elif cached_mime_type == 'text/csv':
-            update_success, update_message = google_drive_service.update_csv_file(
+            update_success, _ = google_drive_service.update_csv_file(
                 cached_file_id, cached_access_token, df
             )
         elif cached_mime_type == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-            update_success, update_message = google_drive_service.update_xlsx_file(
+            update_success, _ = google_drive_service.update_xlsx_file(
                 cached_file_id, cached_access_token, df
             )
         else:
-            app.logger.warning(f"⚠️ Tipo de archivo no soportado: {cached_mime_type}")
+            app.logger.warning(f"[SYNC] Tipo no soportado - {cached_mime_type}")
             return
         
         if update_success:
-            pending_sync = False  # Resetear bandera
-            app.logger.info(f"✅ Sincronización automática exitosa: {update_message}")
+            pending_sync = False
+            app.logger.info("[SYNC] Drive actualizado - OK")
         else:
-            app.logger.error(f"❌ Fallo en sincronización automática: {update_message}")
+            app.logger.error("[SYNC] Drive update - FAIL")
             
     except Exception as e:
-        app.logger.error(f"❌ Error en sincronización automática: {str(e)}")
-        import traceback
-        app.logger.error(traceback.format_exc())
+        app.logger.error(f"[SYNC] Exception - {str(e)}")
 
 
 @app.route('/', methods=['GET'])
@@ -323,11 +313,12 @@ def send_batch_messages():
         if not pending_contacts:
             return jsonify({
                 'success': True,
-                'message': 'No hay contactos pendientes de envío',
+                'message': 'No hay contactos pendientes de envio',
                 'stats': csv_handler.get_statistics(df)
             }), 200
         
-        # Procesar envíos
+        app.logger.info(f"[SEND] Batch iniciado - {len(pending_contacts)} pendientes")
+        
         results = []
         sent_count = 0
         error_count = 0
@@ -337,9 +328,6 @@ def send_batch_messages():
             phone = contact_info['telefono']
             name = contact_info['nombre']
             
-            # Extraer parámetros de la plantilla desde el CSV
-            # IMPORTANTE: El orden DEBE coincidir con el orden de aparición en la plantilla
-            # {{1}}, {{2}}, {{3}}, {{4}}, {{5}}, {{6}}, {{7}}, {{8}}
             parameters = [
                 str(row.get('nombre', '')),
                 str(row.get('modalidad', '')),
@@ -351,7 +339,6 @@ def send_batch_messages():
                 str(row.get('lugar', ''))
             ]
             
-            # Enviar mensaje usando plantilla
             success, result = whatsapp_service.send_template_message(
                 phone, 
                 template_name, 
@@ -359,10 +346,8 @@ def send_batch_messages():
                 language_code
             )
             
-            # Actualizar estado en el DataFrame
             df = csv_handler.update_send_status(df, idx, success, result)
             
-            # Guardar también en SQLite
             if success:
                 estudiante_data = {
                     'telefono_e164': phone,
@@ -382,9 +367,8 @@ def send_batch_messages():
                 }
                 db_success, db_msg = db_handler.insert_or_update_estudiante(estudiante_data)
                 if not db_success:
-                    app.logger.warning(f"⚠️ No se pudo guardar en SQLite: {db_msg}")
+                    app.logger.error(f"[SEND] DB update failed - {phone}: {db_msg}")
             
-            # Registrar resultado
             results.append({
                 'name': name,
                 'phone': phone,
@@ -397,16 +381,15 @@ def send_batch_messages():
                 sent_count += 1
             else:
                 error_count += 1
+                app.logger.error(f"[SEND] {phone} - FAIL ({result})")
             
-            # Delay entre mensajes para respetar rate limits de la API
-            # Esto previene bloqueos temporales por exceso de peticiones
             if idx < len(pending_contacts) - 1:
                 time.sleep(DELAY_SECONDS)
         
-        # Guardar cambios en el CSV
         csv_handler.save_csv(df)
         
-        # Preparar respuesta con resumen completo
+        app.logger.info(f"[SEND] Batch completado - {sent_count} OK, {error_count} FAIL")
+        
         return jsonify({
             'success': True,
             'message': 'Envío masivo completado',
@@ -422,7 +405,7 @@ def send_batch_messages():
         }), 200
     
     except Exception as e:
-        app.logger.error(f"Error en send_batch_messages: {str(e)}")
+        app.logger.error(f"[SEND] Batch exception - {str(e)}")
         return jsonify({
             'success': False,
             'error': f'Error interno: {str(e)}'
@@ -805,11 +788,9 @@ def send_template():
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     """
-    Webhook para recibir notificaciones de WhatsApp.
-
-    Maneja:
-    1) GET: verificación del webhook (una sola vez).
-    2) POST: eventos de mensajes (texto, botones de plantilla, interactivos, etc.).
+    Webhook para recibir notificaciones de WhatsApp Business API.
+    GET: Verificacion del webhook (handshake inicial con Meta).
+    POST: Eventos de mensajes entrantes.
     """
     if request.method == 'GET':
         verify_token = os.getenv('VERIFY_TOKEN', 'mi_token_secreto')
@@ -818,16 +799,15 @@ def webhook():
         challenge = request.args.get('hub.challenge')
 
         if mode == 'subscribe' and token == verify_token:
-            app.logger.info('Webhook verificado exitosamente')
+            app.logger.info('[WEBHOOK] Verificacion - OK')
             return challenge, 200
         else:
-            app.logger.warning('Fallo en la verificación del webhook')
+            app.logger.warning('[WEBHOOK] Verificacion - FAIL (token mismatch)')
             return 'Forbidden', 403
 
     elif request.method == 'POST':
         try:
             body = request.get_json()
-            app.logger.info(f"Webhook recibido: {body}")
 
             if not body or 'entry' not in body:
                 return jsonify({'status': 'ok'}), 200
@@ -847,15 +827,11 @@ def webhook():
                         response_text = None
                         button_id = None
 
-                        # (1) Botones de PLANTILLA (quick replies de plantilla)
                         if message_type == 'button':
                             btn = message.get('button', {}) or {}
                             response_text = btn.get('text', '')
-                            # 'payload' puede venir o no; si no, usamos el texto como fallback
                             button_id = btn.get('payload') or response_text
-                            app.logger.info(f"🟢 Botón de plantilla - payload: {button_id}, texto: {response_text}")
 
-                        # (2) Interactivos enviados como 'interactive' (no-plantilla)
                         elif message_type == 'interactive':
                             interactive = message.get('interactive', {}) or {}
                             itype = interactive.get('type')
@@ -864,47 +840,38 @@ def webhook():
                                 br = interactive.get('button_reply', {}) or {}
                                 button_id = br.get('id') or br.get('payload')
                                 response_text = br.get('title', '')
-                                app.logger.info(f"🟦 Botón interactivo - id: {button_id}, texto: {response_text}")
 
                             elif itype == 'list_reply':
                                 lr = interactive.get('list_reply', {}) or {}
                                 button_id = lr.get('id')
                                 response_text = lr.get('title', '')
-                                app.logger.info(f"🟪 Lista interactiva - id: {button_id}, texto: {response_text}")
 
-                            # (Opcional) Respuestas de Flows/NFM (si las usas)
                             elif itype == 'nfm_reply':
                                 nfm = interactive.get('nfm_reply', {}) or {}
                                 button_id = f"flow:{nfm.get('name','')}"
-                                response_text = nfm.get('response_json')  # JSON de respuestas del flow
-                                app.logger.info(f"🟨 Flow reply - id: {button_id}, payload: {response_text}")
+                                response_text = nfm.get('response_json')
 
-                        # (3) Texto escrito por el usuario
                         elif message_type == 'text':
                             response_text = message.get('text', {}).get('body', '')
-                            if context:
-                                app.logger.info(f"💬 Texto (con contexto) - {response_text} | reply_to={context.get('id')}")
-                            else:
-                                app.logger.info(f"💬 Texto - {response_text}")
 
-                        # ---- Normalización/validación de respuesta y guardado ----
                         if response_text and from_number:
                             response_normalized = str(response_text).strip().lower()
 
-                            valid_yes = ['si', 'sí', 'yes', 'y']
+                            valid_yes = ['si', 'si', 'yes', 'y']
                             valid_no = ['no', 'n']
                             is_valid_response = (response_normalized in valid_yes or
                                                  response_normalized in valid_no)
 
                             if is_valid_response:
-                                standardized_response = "Sí" if response_normalized in valid_yes else "No"
+                                standardized_response = "Si" if response_normalized in valid_yes else "No"
+                                
+                                app.logger.info(f"[WEBHOOK] Respuesta recibida - {from_number}: \"{standardized_response}\"")
 
                                 success, df, msg = csv_handler.load_csv()
                                 if not success:
-                                    app.logger.error(f"Error cargando CSV: {msg}")
+                                    app.logger.error(f"[WEBHOOK] CSV load failed - {msg}")
                                     continue
 
-                                # Preferimos guardar algún identificador del "clic" o el id del mensaje respondido
                                 correlation_id = button_id or context.get('id', '')
 
                                 success, df, msg = csv_handler.update_response(
@@ -916,85 +883,69 @@ def webhook():
 
                                 if success:
                                     csv_handler.save_csv(df)
-                                    app.logger.info(f"✅ {msg} - Respuesta: '{standardized_response}'")
+                                    app.logger.info(f"[WEBHOOK] Respuesta guardada - {from_number}")
                                     
-                                    # Actualizar también en SQLite
                                     db_success, db_msg = db_handler.update_respuesta(
                                         from_number,
                                         standardized_response,
                                         df.at[csv_handler.find_contact_by_phone(df, from_number), 'fecha_respuesta']
                                     )
-                                    if db_success:
-                                        app.logger.info(f"✅ SQLite actualizado: {db_msg}")
-                                    else:
-                                        app.logger.warning(f"⚠️ SQLite no actualizado: {db_msg}")
+                                    if not db_success:
+                                        app.logger.error(f"[WEBHOOK] DB update failed - {from_number}: {db_msg}")
 
-                                    # Marcar pending sync (si usas este flag global)
                                     try:
                                         global pending_sync
                                         pending_sync = True
-                                        app.logger.info("🔄 Cambios pendientes marcados para sincronización con Drive")
                                     except NameError:
-                                        # Si no usas pending_sync en tu app, puedes ignorar este bloque
                                         pass
 
-                                    # Agradecimiento (no bloquear si falla)
                                     try:
-                                        whatsapp_service.send_text_message(
+                                        send_ok, send_result = whatsapp_service.send_text_message(
                                             from_number,
-                                            "¡Muchas gracias por tu respuesta! 🙏\n\n"
-                                            "Hemos registrado tu confirmación correctamente. "
-                                            "Si tienes alguna pregunta adicional, no dudes en contactarnos. "
-                                            "¡Que tengas un excelente día!"
+                                            "Muchas gracias por tu respuesta.\n\n"
+                                            "Hemos registrado tu confirmacion correctamente. "
+                                            "Si tienes alguna pregunta adicional, no dudes en contactarnos."
                                         )
-                                        app.logger.info(f"📨 Mensaje de agradecimiento enviado a {from_number}")
+                                        if send_ok:
+                                            app.logger.info(f"[WEBHOOK] Confirmacion enviada - {from_number}")
+                                        else:
+                                            app.logger.error(f"[WEBHOOK] Confirmacion fallida - {from_number}: {send_result}")
                                     except Exception as e:
-                                        app.logger.error(f"Error enviando agradecimiento: {str(e)}")
+                                        app.logger.error(f"[WEBHOOK] Confirmacion exception - {from_number}: {str(e)}")
 
                                 else:
-                                    # Verificar si ya había respondido anteriormente
                                     if msg.startswith("already_answered:"):
-                                        previous_answer = msg.split(":", 1)[1]
-                                        app.logger.info(f"⚠️ Usuario {from_number} ya respondió anteriormente: '{previous_answer}' - Ignorando nuevo intento")
-                                        # No enviar ningún mensaje, simplemente ignorar
+                                        app.logger.warning(f"[WEBHOOK] Respuesta duplicada ignorada - {from_number}")
                                     else:
-                                        app.logger.warning(f"⚠️ {msg}")
+                                        app.logger.warning(f"[WEBHOOK] Update failed - {from_number}: {msg}")
 
                             else:
-                                # Respuesta no válida → verificar si ya respondió antes
-                                app.logger.info(f"ℹ️ Respuesta no válida de {from_number}: '{response_text}'")
+                                app.logger.warning(f"[WEBHOOK] Respuesta invalida - {from_number}: \"{response_text}\"")
                                 
-                                # Verificar si el usuario ya tiene una respuesta registrada
                                 success, df, msg = csv_handler.load_csv()
                                 if success:
                                     idx = csv_handler.find_contact_by_phone(df, from_number)
                                     if idx is not None:
                                         respuesta_existente = str(df.at[idx, 'respuesta']).strip()
                                         if respuesta_existente and respuesta_existente != 'nan':
-                                            # Ya respondió, ignorar mensaje inválido
-                                            app.logger.info(f"ℹ️ Usuario ya respondió '{respuesta_existente}' - Ignorando mensaje inválido")
                                             continue
                                 
-                                # Si no ha respondido, enviar mensaje de validación
                                 try:
                                     whatsapp_service.send_text_message(
                                         from_number,
-                                        "⚠️ Solo se aceptan respuestas de *Sí* o *No*.\n\n"
+                                        "Solo se aceptan respuestas de Si o No.\n\n"
                                         "Por favor, responde con:\n"
-                                        "• *Sí* (o Si, yes, y)\n"
-                                        "• *No* (o no, n)\n\n"
-                                        "Gracias por tu comprensión."
+                                        "- Si (o yes, y)\n"
+                                        "- No (o n)\n\n"
+                                        "Gracias."
                                     )
-                                    app.logger.info(f"📨 Mensaje de validación enviado a {from_number}")
                                 except Exception as e:
-                                    app.logger.error(f"Error enviando mensaje de validación: {str(e)}")
+                                    app.logger.error(f"[WEBHOOK] Validacion msg failed - {from_number}: {str(e)}")
 
-            # Confirmar recepción para evitar reintentos de Meta
             return jsonify({'status': 'ok'}), 200
 
         except Exception as e:
-            app.logger.error(f"Error procesando webhook: {str(e)}")
-            # Aun con error respondemos 200 para evitar reintentos
+            app.logger.error(f"[WEBHOOK] Exception - {str(e)}")
             return jsonify({'status': 'ok'}), 200
 
 
