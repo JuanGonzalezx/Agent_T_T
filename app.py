@@ -313,8 +313,10 @@ def send_batch_messages():
         error_count = 0
         
         for i, student in enumerate(pending_students):
-            phone = student.get('telefono_e164', '')
-            name = student.get('nombre', '')
+            phone_raw = student.get('telefono_e164', '')
+            phone = str(phone_raw) if phone_raw else ''
+            name_raw = student.get('nombre', '')
+            name = str(name_raw) if name_raw else ''
             
             if not phone:
                 app.logger.warning(f"[SEND] Estudiante sin telefono: {name}")

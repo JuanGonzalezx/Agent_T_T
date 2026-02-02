@@ -452,7 +452,9 @@ class DatabaseHandler:
         Returns:
             Tuple[bool, str]: (exito, mensaje)
         """
-        telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+        # Asegurar que telefono sea string
+        telefono_str = str(telefono) if telefono else ''
+        telefono_clean = telefono_str.replace('+', '').replace(' ', '').replace('-', '')
         
         try:
             from datetime import datetime
