@@ -587,6 +587,33 @@ class DatabaseHandler:
             print(f"Error obteniendo estadísticas: {str(e)}")
             return {}
     
+    def get_respuesta_existente(self, telefono: str) -> Tuple[bool, Optional[str]]:
+        """
+        Verifica si un estudiante ya tiene respuesta registrada en la base de datos.
+        
+        Args:
+            telefono: Numero de telefono del estudiante
+            
+        Returns:
+            Tuple[bool, Optional[str]]: (existe_respuesta, valor_respuesta)
+        """
+        telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+        
+        try:
+            result = self._execute_query('''
+                SELECT respuesta FROM estudiantes
+                WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+            ''', (telefono_clean,), fetch_one=True)
+            
+            if result:
+                respuesta = result.get('respuesta') if isinstance(result, dict) else result[0]
+                if respuesta and str(respuesta).strip() and str(respuesta).strip().lower() != 'none':
+                    return True, str(respuesta).strip()
+            return False, None
+        except Exception as e:
+            print(f"Error verificando respuesta: {str(e)}")
+            return False, None
+    
     def update_respuesta(
         self, 
         telefono: str, 

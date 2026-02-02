@@ -872,40 +872,44 @@ def webhook():
                             if is_valid_response:
                                 standardized_response = "Si" if response_normalized in valid_yes else "No"
                                 
-                                app.logger.info(f"[WEBHOOK] Respuesta recibida - {from_number}: \"{standardized_response}\"")
-
-                                success, df, msg = csv_handler.load_csv()
-                                if not success:
-                                    app.logger.error(f"[WEBHOOK] CSV load failed - {msg}")
+                                # Verificar en Turso si ya tiene respuesta (fuente de verdad)
+                                ya_respondio, respuesta_previa = db_handler.get_respuesta_existente(from_number)
+                                
+                                if ya_respondio:
+                                    app.logger.warning(f"[WEBHOOK] Respuesta duplicada ignorada - {from_number}")
                                     continue
-
-                                correlation_id = button_id or context.get('id', '')
-
-                                success, df, msg = csv_handler.update_response(
-                                    df,
+                                
+                                app.logger.info(f"[WEBHOOK] Respuesta recibida - {from_number}: \"{standardized_response}\"")
+                                
+                                # Guardar en Turso primero (fuente de verdad)
+                                from datetime import datetime
+                                fecha_respuesta = datetime.now().isoformat()
+                                
+                                db_success, db_msg = db_handler.update_respuesta(
                                     from_number,
                                     standardized_response,
-                                    correlation_id
+                                    fecha_respuesta
                                 )
-
-                                if success:
-                                    csv_handler.save_csv(df)
-                                    app.logger.info(f"[WEBHOOK] Respuesta guardada - {from_number}")
+                                
+                                if db_success:
+                                    app.logger.info(f"[WEBHOOK] Respuesta guardada en DB - {from_number}")
                                     
-                                    db_success, db_msg = db_handler.update_respuesta(
-                                        from_number,
-                                        standardized_response,
-                                        df.at[csv_handler.find_contact_by_phone(df, from_number), 'fecha_respuesta']
-                                    )
-                                    if not db_success:
-                                        app.logger.error(f"[WEBHOOK] DB update failed - {from_number}: {db_msg}")
-
+                                    # Actualizar CSV como backup
+                                    success, df, msg = csv_handler.load_csv()
+                                    if success:
+                                        idx = csv_handler.find_contact_by_phone(df, from_number)
+                                        if idx is not None:
+                                            df.at[idx, 'respuesta'] = standardized_response
+                                            df.at[idx, 'fecha_respuesta'] = fecha_respuesta
+                                            csv_handler.save_csv(df)
+                                    
                                     try:
                                         global pending_sync
                                         pending_sync = True
                                     except NameError:
                                         pass
 
+                                    # Enviar mensaje de confirmacion
                                     try:
                                         send_ok, send_result = whatsapp_service.send_text_message(
                                             from_number,
@@ -919,23 +923,16 @@ def webhook():
                                             app.logger.error(f"[WEBHOOK] Confirmacion fallida - {from_number}: {send_result}")
                                     except Exception as e:
                                         app.logger.error(f"[WEBHOOK] Confirmacion exception - {from_number}: {str(e)}")
-
                                 else:
-                                    if msg.startswith("already_answered:"):
-                                        app.logger.warning(f"[WEBHOOK] Respuesta duplicada ignorada - {from_number}")
-                                    else:
-                                        app.logger.warning(f"[WEBHOOK] Update failed - {from_number}: {msg}")
+                                    app.logger.error(f"[WEBHOOK] DB update failed - {from_number}: {db_msg}")
 
                             else:
                                 app.logger.warning(f"[WEBHOOK] Respuesta invalida - {from_number}: \"{response_text}\"")
                                 
-                                success, df, msg = csv_handler.load_csv()
-                                if success:
-                                    idx = csv_handler.find_contact_by_phone(df, from_number)
-                                    if idx is not None:
-                                        respuesta_existente = str(df.at[idx, 'respuesta']).strip()
-                                        if respuesta_existente and respuesta_existente != 'nan':
-                                            continue
+                                # Verificar en Turso si ya respondio
+                                ya_respondio, _ = db_handler.get_respuesta_existente(from_number)
+                                if ya_respondio:
+                                    continue
                                 
                                 try:
                                     whatsapp_service.send_text_message(
