@@ -718,21 +718,24 @@ class DatabaseHandler:
                 check_result = self._execute_query('''
                     SELECT COUNT(*) as count FROM estudiantes
                     WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
-                      AND (respuesta IS NULL OR respuesta = '')
+                      AND (respuesta IS NULL OR respuesta = '' OR LOWER(respuesta) = 'default')
                 ''', (telefono_clean,), fetch_one=True)
                 
-                if check_result and check_result['count'] > 0:
+                # Convertir count a int (Turso puede devolverlo como string)
+                count = int(check_result['count']) if check_result and check_result.get('count') else 0
+                
+                if count > 0:
                     self._execute_query('''
                         UPDATE estudiantes
                         SET respuesta = ?,
                             fecha_respuesta = ?,
                             fecha_actualizacion = CURRENT_TIMESTAMP
                         WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
-                          AND (respuesta IS NULL OR respuesta = '')
+                          AND (respuesta IS NULL OR respuesta = '' OR LOWER(respuesta) = 'default')
                     ''', (respuesta, fecha_respuesta, telefono_clean))
-                    return True, f"Respuesta actualizada para {check_result['count']} registro(s)"
+                    return True, f"Respuesta actualizada para {count} registro(s)"
                 else:
-                    return False, "No se encontró el estudiante o ya tiene respuesta"
+                    return False, "No se encontro el estudiante o ya tiene respuesta"
             else:
                 # SQLite puede usar rowcount
                 conn = self._get_connection()
