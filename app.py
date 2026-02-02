@@ -9,7 +9,7 @@ y bien documentada para integraciones externas.
 import os
 import time
 import json
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from typing import Dict, Any, Tuple
 import io
@@ -123,6 +123,7 @@ def index():
         'database': 'Turso (cloud)' if db_handler.use_turso else 'SQLite (local)',
         'endpoints': {
             'health': '/health',
+            'privacy': '/privacy',
             'estudiantes': '/api/estudiantes/all',
             'bootcamps': '/api/bootcamps',
             'estadisticas': '/api/estadisticas',
@@ -131,6 +132,12 @@ def index():
             'webhook': '/webhook'
         }
     }), 200
+
+
+@app.route('/privacy', methods=['GET'])
+def privacy_policy():
+    """Politica de privacidad requerida por Meta para apps en produccion."""
+    return send_from_directory('templates', 'privacy.html')
 
 
 @app.route('/health', methods=['GET'])
