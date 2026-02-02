@@ -1,9 +1,11 @@
 """
-API REST para el sistema de envío de mensajes WhatsApp.
+API REST para el sistema de envio de mensajes WhatsApp.
 
-Este servidor Flask expone endpoints para gestionar el envío de mensajes
-a través de WhatsApp Business API, proporcionando una interfaz HTTP limpia
+Este servidor Flask expone endpoints para gestionar el envio de mensajes
+a traves de WhatsApp Business API, proporcionando una interfaz HTTP limpia
 y bien documentada para integraciones externas.
+
+Arquitectura: Turso como fuente unica de verdad.
 """
 
 import os
@@ -19,7 +21,6 @@ import pandas as pd
 from services.whatsapp_service import WhatsAppService
 from services.google_drive_service import GoogleDriveService
 from services.db_handler import DatabaseHandler
-from utils.csv_handler import CSVHandler
 from utils.data_normalizer import (
     normalize_phone_column,
     clean_phone_numbers,
@@ -28,31 +29,24 @@ from utils.data_normalizer import (
 )
 
 
-# Inicialización de la aplicación Flask
-# __name__ permite a Flask localizar recursos relativos al módulo actual
+# Inicializacion de la aplicacion Flask
 app = Flask(__name__)
 
 # CORS habilitado para permitir peticiones desde frontends en otros dominios
-# En producción, configurar origins específicos para mayor seguridad
 CORS(app)
 
-# Configuración de la aplicación
-# Estas constantes centralizan valores que podrían cambiar según el ambiente
-CSV_PATH = os.getenv("CSV_PATH", "bd_envio.csv")
+# Configuracion de la aplicacion
 DELAY_SECONDS = float(os.getenv("DELAY_SECONDS", "1.5"))
 
-# Inicialización de servicios
-# Los servicios se instancian una sola vez para optimizar recursos
+# Inicializacion de servicios
 whatsapp_service = WhatsAppService()
 google_drive_service = GoogleDriveService()
-csv_handler = CSVHandler(CSV_PATH)
 
-# SQLite con soporte para disco persistente en Render
-# Si existe /data (volumen en Render), usa ese path; sino, usa local
+# Turso como fuente unica de verdad
 DB_PATH = os.path.join(os.getenv('DATA_DIR', '.'), 'whatsapp_tracking.db')
 db_handler = DatabaseHandler(DB_PATH)
 
-# Variables para sincronización automática con Drive
+# Variables para sincronizacion automatica con Drive
 pending_sync = False
 cached_file_id = None
 cached_access_token = None
@@ -61,7 +55,7 @@ cached_mime_type = None
 
 def sync_to_drive_if_needed():
     """
-    Sincroniza bd_envio.csv a Google Drive si hay cambios pendientes.
+    Sincroniza datos de Turso a Google Drive si hay cambios pendientes.
     Esta funcion es llamada por el scheduler cada 5 minutos.
     Solo sincroniza si pending_sync es True, optimizando llamadas a la API.
     """
@@ -75,10 +69,15 @@ def sync_to_drive_if_needed():
         return
     
     try:
-        success, df, msg = csv_handler.load_csv()
-        if not success:
-            app.logger.error(f"[SYNC] CSV load failed - {msg}")
+        # Obtener datos desde Turso
+        estudiantes = db_handler.get_all_estudiantes()
+        if not estudiantes:
+            app.logger.warning("[SYNC] No hay datos en Turso para sincronizar")
             return
+        
+        # Convertir a DataFrame para enviar a Drive
+        import pandas as pd
+        df = pd.DataFrame(estudiantes)
         
         update_success = False
         
@@ -146,19 +145,19 @@ def health_check():
     Endpoint de health check para monitoreo.
     
     Este endpoint permite a sistemas de monitoreo verificar que el
-    servidor está activo y respondiendo correctamente.
+    servidor esta activo y respondiendo correctamente.
     
     Returns:
-        JSON: Estado del servidor y configuración básica
+        JSON: Estado del servidor y configuracion basica
     """
-    # Validar que las credenciales estén configuradas
+    # Validar que las credenciales esten configuradas
     valid, msg = whatsapp_service.validate_credentials()
     
     return jsonify({
         'status': 'healthy' if valid else 'warning',
         'service': 'WhatsApp Messaging API',
         'credentials': msg,
-        'csv_path': CSV_PATH
+        'database': 'Turso (libSQL)'
     }), 200 if valid else 503
 
 
@@ -270,20 +269,19 @@ def send_simple_message():
 @app.route('/api/messages/send-batch', methods=['POST'])
 def send_batch_messages():
     """
-    Envía mensajes masivos usando el CSV de contactos.
+    Envia mensajes masivos usando datos de Turso.
     
-    Este endpoint procesa el CSV, filtra los contactos pendientes y
-    envía mensajes usando plantillas de WhatsApp con los datos del CSV.
+    Este endpoint consulta estudiantes pendientes en Turso y
+    envia mensajes usando plantillas de WhatsApp.
     
     Request Body:
         {
-            "template_name": "prueba_matricula",  // Nombre de la plantilla
-            "language_code": "es",  // Opcional, default: "es"
-            "create_backup": true  // Opcional, default: true
+            "template_name": "prueba_matricula",
+            "language_code": "es"
         }
     
     Returns:
-        JSON: Resumen del envío con estadísticas detalladas
+        JSON: Resumen del envio con estadisticas
     """
     try:
         data = request.get_json()
@@ -291,59 +289,46 @@ def send_batch_messages():
         if not data:
             return jsonify({
                 'success': False,
-                'error': 'No se recibió JSON en el body'
+                'error': 'No se recibio JSON en el body'
             }), 400
         
         template_name = data.get('template_name', 'prueba_matricula')
         language_code = data.get('language_code', 'es')
-        create_backup = data.get('create_backup', True)
         
-        # Cargar CSV
-        success, df, msg = csv_handler.load_csv()
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': msg
-            }), 400
+        # Obtener estudiantes pendientes desde Turso
+        pending_students = db_handler.get_estudiantes_pendientes_envio()
         
-        # Crear backup si se solicita
-        # Los backups protegen contra pérdida de datos en caso de errores
-        backup_path = None
-        if create_backup:
-            success, backup_path, backup_msg = csv_handler.create_backup(df)
-            if not success:
-                app.logger.warning(f"No se pudo crear backup: {backup_msg}")
-        
-        # Obtener contactos pendientes
-        pending_contacts = csv_handler.get_pending_contacts(df)
-        
-        if not pending_contacts:
+        if not pending_students:
+            stats = db_handler.get_estadisticas()
             return jsonify({
                 'success': True,
-                'message': 'No hay contactos pendientes de envio',
-                'stats': csv_handler.get_statistics(df)
+                'message': 'No hay estudiantes pendientes de envio',
+                'stats': stats
             }), 200
         
-        app.logger.info(f"[SEND] Batch iniciado - {len(pending_contacts)} pendientes")
+        app.logger.info(f"[SEND] Batch iniciado - {len(pending_students)} pendientes")
         
         results = []
         sent_count = 0
         error_count = 0
         
-        for idx, row in pending_contacts:
-            contact_info = csv_handler.get_contact_info(row)
-            phone = contact_info['telefono']
-            name = contact_info['nombre']
+        for i, student in enumerate(pending_students):
+            phone = student.get('telefono_e164', '')
+            name = student.get('nombre', '')
+            
+            if not phone:
+                app.logger.warning(f"[SEND] Estudiante sin telefono: {name}")
+                continue
             
             parameters = [
-                str(row.get('nombre', '')),
-                str(row.get('modalidad', '')),
-                str(row.get('bootcamp_nombre', '')),
-                str(row.get('ingles_inicio', '')),
-                str(row.get('ingles_fin', '')),
-                str(row.get('inicio_formacion', '')),
-                str(row.get('horario', '')),
-                str(row.get('lugar', ''))
+                str(student.get('nombre', '')),
+                str(student.get('modalidad', '')),
+                str(student.get('bootcamp_nombre', '')),
+                str(student.get('ingles_inicio', '')),
+                str(student.get('ingles_fin', '')),
+                str(student.get('inicio_formacion', '')),
+                str(student.get('horario', '')),
+                str(student.get('lugar', ''))
             ]
             
             success, result = whatsapp_service.send_template_message(
@@ -353,28 +338,15 @@ def send_batch_messages():
                 language_code
             )
             
-            df = csv_handler.update_send_status(df, idx, success, result)
-            
+            # Actualizar estado en Turso
             if success:
-                estudiante_data = {
-                    'telefono_e164': phone,
-                    'nombre': name,
-                    'bootcamp_id': row.get('bootcamp_id', ''),
-                    'bootcamp_nombre': row.get('bootcamp_nombre', ''),
-                    'modalidad': row.get('modalidad', ''),
-                    'ingles_inicio': row.get('ingles_inicio', ''),
-                    'ingles_fin': row.get('ingles_fin', ''),
-                    'inicio_formacion': row.get('inicio_formacion', ''),
-                    'horario': row.get('horario', ''),
-                    'lugar': row.get('lugar', ''),
-                    'opt_in': row.get('opt_in', ''),
-                    'estado_envio': 'sent',
-                    'fecha_envio': df.at[idx, 'fecha_envio'],
-                    'message_id': result
-                }
-                db_success, db_msg = db_handler.insert_or_update_estudiante(estudiante_data)
-                if not db_success:
-                    app.logger.error(f"[SEND] DB update failed - {phone}: {db_msg}")
+                db_handler.update_estado_envio(phone, 'sent', result)
+                sent_count += 1
+                app.logger.info(f"[SEND] {phone} - OK ({result})")
+            else:
+                db_handler.update_estado_envio(phone, 'error', None)
+                error_count += 1
+                app.logger.error(f"[SEND] {phone} - FAIL ({result})")
             
             results.append({
                 'name': name,
@@ -384,30 +356,22 @@ def send_batch_messages():
                 'error': result if not success else None
             })
             
-            if success:
-                sent_count += 1
-            else:
-                error_count += 1
-                app.logger.error(f"[SEND] {phone} - FAIL ({result})")
-            
-            if idx < len(pending_contacts) - 1:
+            # Delay entre mensajes
+            if i < len(pending_students) - 1:
                 time.sleep(DELAY_SECONDS)
-        
-        csv_handler.save_csv(df)
         
         app.logger.info(f"[SEND] Batch completado - {sent_count} OK, {error_count} FAIL")
         
         return jsonify({
             'success': True,
-            'message': 'Envío masivo completado',
+            'message': 'Envio masivo completado',
             'template_name': template_name,
             'language_code': language_code,
             'stats': {
                 'sent': sent_count,
                 'errors': error_count,
-                'total_processed': len(pending_contacts)
+                'total_processed': len(pending_students)
             },
-            'backup_path': backup_path,
             'results': results
         }), 200
     
@@ -422,25 +386,13 @@ def send_batch_messages():
 @app.route('/api/contacts/stats', methods=['GET'])
 def get_contacts_stats():
     """
-    Obtiene estadísticas sobre los contactos en el CSV.
-    
-    Este endpoint proporciona métricas útiles para monitorear el
-    progreso de las campañas de mensajería.
+    Obtiene estadisticas de estudiantes desde Turso.
     
     Returns:
-        JSON: Estadísticas detalladas de los contactos
+        JSON: Estadisticas de la base de datos
     """
     try:
-        # Cargar CSV
-        success, df, msg = csv_handler.load_csv()
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': msg
-            }), 400
-        
-        # Calcular estadísticas
-        stats = csv_handler.get_statistics(df)
+        stats = db_handler.get_estadisticas()
         
         return jsonify({
             'success': True,
@@ -458,31 +410,29 @@ def get_contacts_stats():
 @app.route('/api/contacts/pending', methods=['GET'])
 def get_pending_contacts():
     """
-    Lista los contactos pendientes de envío.
+    Lista los estudiantes pendientes de envio desde Turso.
     
-    Útil para revisar qué contactos serán procesados antes de
-    ejecutar un envío masivo.
+    Util para revisar que contactos seran procesados antes de
+    ejecutar un envio masivo.
     
     Returns:
-        JSON: Lista de contactos pendientes con su información
+        JSON: Lista de estudiantes pendientes con su informacion
     """
     try:
-        # Cargar CSV
-        success, df, msg = csv_handler.load_csv()
-        if not success:
-            return jsonify({
-                'success': False,
-                'error': msg
-            }), 400
+        # Obtener estudiantes pendientes desde Turso
+        pending_students = db_handler.get_estudiantes_pendientes_envio()
         
-        # Obtener contactos pendientes
-        pending_contacts = csv_handler.get_pending_contacts(df)
-        
-        # Formatear información para la respuesta
+        # Formatear informacion para la respuesta
         contacts_list = []
-        for idx, row in pending_contacts:
-            contact_info = csv_handler.get_contact_info(row)
-            contacts_list.append(contact_info)
+        for student in pending_students:
+            contacts_list.append({
+                'nombre': student.get('nombre', ''),
+                'telefono': student.get('telefono_e164', ''),
+                'bootcamp': student.get('bootcamp_nombre', ''),
+                'modalidad': student.get('modalidad', ''),
+                'opt_in': student.get('opt_in', ''),
+                'estado_envio': student.get('estado_envio', '')
+            })
         
         return jsonify({
             'success': True,
@@ -504,15 +454,15 @@ def get_pending_contacts():
 @app.route('/api/google/upload', methods=['POST'])
 def upload_from_google():
     """
-    Procesa un archivo de Google Drive: descarga, normaliza, actualiza CSV local y Drive.
+    Procesa un archivo de Google Drive: descarga, normaliza, guarda en Turso y actualiza Drive.
     
     Flujo:
-    1. Autenticación con Google OAuth
-    2. Selección de archivo (Sheet/CSV/XLSX) desde Drive
+    1. Autenticacion con Google OAuth
+    2. Seleccion de archivo (Sheet/CSV/XLSX) desde Drive
     3. Descarga del contenido del archivo
-    4. Normalización de columnas y teléfonos
-    5. Añade columnas de tracking (estado_envio, fecha_envio, message_id, respuesta, fecha_respuesta)
-    6. Guarda en bd_envio.csv local
+    4. Normalizacion de columnas y telefonos
+    5. Agrega columnas de tracking (estado_envio, fecha_envio, message_id, respuesta, fecha_respuesta)
+    6. Guarda en Turso (fuente unica de verdad)
     7. Actualiza el archivo original en Drive con las nuevas columnas
     
     Request Body:
@@ -522,7 +472,7 @@ def upload_from_google():
         }
     
     Returns:
-        JSON: Datos procesados con información de sincronización
+        JSON: Datos procesados con informacion de sincronizacion
     """
     try:
         # Validar request
@@ -540,7 +490,7 @@ def upload_from_google():
         cached_file_id = file_id
         cached_access_token = access_token
         
-        app.logger.info(f"📥 Procesando archivo de Google Drive: {file_id}")
+        app.logger.info(f"[DRIVE] Procesando archivo: {file_id}")
         
         # 1. Obtener metadata del archivo
         success, metadata, error = google_drive_service.get_file_metadata(file_id, access_token)
@@ -554,7 +504,7 @@ def upload_from_google():
         # Cachear mime_type para sincronización automática
         cached_mime_type = mime_type
         
-        app.logger.info(f"📄 Archivo: {file_name} | Tipo: {mime_type}")
+        app.logger.info(f"[DRIVE] Archivo: {file_name} | Tipo: {mime_type}")
         
         # Validar tipo de archivo soportado
         supported_types = [
@@ -573,7 +523,7 @@ def upload_from_google():
         if not success:
             return jsonify({'success': False, 'error': error}), 400
         
-        app.logger.info(f"✅ Archivo descargado ({len(content)} bytes)")
+        app.logger.info(f"[DRIVE] Archivo descargado ({len(content)} bytes)")
         
         # 3. Parsear contenido a DataFrame
         success, df, error = google_drive_service.parse_file_content(content)
@@ -583,44 +533,36 @@ def upload_from_google():
         if df.empty:
             return jsonify({'success': False, 'error': 'El archivo no contiene datos'}), 400
         
-        app.logger.info(f"✅ Archivo parseado: {len(df)} filas, {len(df.columns)} columnas")
+        app.logger.info(f"[DRIVE] Archivo parseado: {len(df)} filas, {len(df.columns)} columnas")
         
         # 4. Normalizar columna de teléfono
         success, df, error = normalize_phone_column(df)
         if not success:
             return jsonify({'success': False, 'error': error}), 400
         
-        app.logger.info("✅ Columna de teléfono normalizada")
+        app.logger.info("[DRIVE] Columna de telefono normalizada")
         
         # 5. Limpiar números de teléfono
         df = clean_phone_numbers(df)
-        app.logger.info("✅ Números de teléfono limpiados")
+        app.logger.info("[DRIVE] Numeros de telefono limpiados")
         
         # 6. Añadir columnas de tracking (estado_envio, fecha_envio, message_id, respuesta, fecha_respuesta)
         df = add_tracking_columns(df)
-        app.logger.info("✅ Columnas de tracking añadidas")
+        app.logger.info("[DRIVE] Columnas de tracking agregadas")
         
         # 7. Validar DataFrame final
         valid, msg = validate_dataframe(df)
         if not valid:
             return jsonify({'success': False, 'error': msg}), 400
         
-        app.logger.info(f"✅ DataFrame validado: {msg}")
+        app.logger.info(f"[DB] DataFrame validado: {msg}")
         
-        # 8. Guardar localmente (sobreescribir bd_envio.csv)
-        ok, save_msg = csv_handler.save_csv(df)
-        if not ok:
-            app.logger.error(f"❌ Error guardando CSV: {save_msg}")
-            return jsonify({'success': False, 'error': f'No se pudo guardar CSV: {save_msg}'}), 500
+        # 8. Guardar en Turso (fuente unica de verdad)
+        app.logger.info("[DB] Guardando datos en Turso...")
+        turso_success_count = 0
+        turso_error_count = 0
         
-        app.logger.info(f"✅ bd_envio.csv actualizado con {len(df)} registros")
-        
-        # 8.1. Guardar en SQLite
-        app.logger.info("💾 Guardando datos en SQLite...")
-        sqlite_success_count = 0
-        sqlite_error_count = 0
-        
-        # Primero, registrar bootcamps únicos
+        # Primero, registrar bootcamps unicos
         bootcamp_ids = df['bootcamp_id'].dropna().unique()
         for bootcamp_id in bootcamp_ids:
             if bootcamp_id:
@@ -629,7 +571,7 @@ def upload_from_google():
                 bootcamp_nombre = bootcamp_row.get('bootcamp_nombre', '')
                 success, msg = db_handler.insert_or_update_bootcamp(bootcamp_id, bootcamp_nombre)
                 if success:
-                    app.logger.info(f"  ✓ Bootcamp registrado: {bootcamp_id}")
+                    app.logger.info(f"[DB] Bootcamp registrado: {bootcamp_id}")
         
         # Luego, registrar estudiantes
         for idx, row in df.iterrows():
@@ -648,17 +590,17 @@ def upload_from_google():
                 'estado_envio': row.get('estado_envio', ''),
                 'fecha_envio': row.get('fecha_envio', None),
                 'message_id': row.get('message_id', ''),
-                'respuesta': row.get('respuesta', ''),
+                'respuesta': row.get('respuesta', 'default'),
                 'fecha_respuesta': row.get('fecha_respuesta', None)
             }
             success, msg = db_handler.insert_or_update_estudiante(estudiante_data)
             if success:
-                sqlite_success_count += 1
+                turso_success_count += 1
             else:
-                sqlite_error_count += 1
-                app.logger.warning(f"  ⚠️ Error guardando estudiante {estudiante_data['nombre']}: {msg}")
+                turso_error_count += 1
+                app.logger.warning(f"[DB] Error guardando estudiante {estudiante_data['nombre']}: {msg}")
         
-        app.logger.info(f"✅ SQLite: {sqlite_success_count} estudiantes guardados, {sqlite_error_count} errores")
+        app.logger.info(f"[DB] Turso: {turso_success_count} estudiantes guardados, {turso_error_count} errores")
         
         # 9. Actualizar archivo en Drive (con las nuevas columnas de tracking)
         update_success = False
@@ -677,13 +619,13 @@ def upload_from_google():
                 file_id, access_token, df
             )
         else:
-            app.logger.info(f"ℹ️ Tipo de archivo no soportado para actualización: {mime_type}")
+            app.logger.info(f"[DRIVE] Tipo no soportado para actualizacion: {mime_type}")
             update_message = f"Tipo de archivo {mime_type} no se actualiza en Drive"
         
         if update_success:
-            app.logger.info(f"✅ Archivo en Drive actualizado: {update_message}")
+            app.logger.info(f"[DRIVE] Archivo actualizado: {update_message}")
         else:
-            app.logger.warning(f"⚠️ No se pudo actualizar Drive: {update_message}")
+            app.logger.warning(f"[DRIVE] No se pudo actualizar: {update_message}")
         
         # 10. Preparar respuesta
         csv_output = io.StringIO()
@@ -705,7 +647,7 @@ def upload_from_google():
         return jsonify(response_data), 200
         
     except Exception as e:
-        app.logger.error(f"❌ Error en upload_from_google: {str(e)}")
+        app.logger.error(f"[DRIVE] Error en upload: {str(e)}")
         import traceback
         app.logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': f'Error interno: {str(e)}'}), 500
@@ -961,7 +903,7 @@ def sync_drive_manual():
             'pending_sync': pending_sync
         }), 200
     except Exception as e:
-        app.logger.error(f"❌ Error en sincronización manual: {str(e)}")
+        app.logger.error(f"[SYNC] Error en sincronizacion manual: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -1308,9 +1250,9 @@ def delete_bootcamp(bootcamp_id):
 @app.route('/api/estudiantes/clear-all', methods=['DELETE'])
 def clear_all_estudiantes():
     """
-    ⚠️ PELIGRO: Elimina TODOS los estudiantes de la base de datos.
+    [WARNING] Elimina TODOS los estudiantes de la base de datos.
     
-    Esta operación no se puede deshacer. Usar con precaución.
+    Esta operacion no se puede deshacer. Usar con precaucion.
     
     Returns:
         JSON: Cantidad de registros eliminados
@@ -1334,9 +1276,9 @@ def clear_all_estudiantes():
 @app.route('/api/bootcamps/clear-all', methods=['DELETE'])
 def clear_all_bootcamps():
     """
-    ⚠️ PELIGRO: Elimina TODOS los bootcamps de la base de datos.
+    [WARNING] Elimina TODOS los bootcamps de la base de datos.
     
-    Esta operación no se puede deshacer. Usar con precaución.
+    Esta operacion no se puede deshacer. Usar con precaucion.
     
     Returns:
         JSON: Cantidad de registros eliminados
@@ -1360,9 +1302,9 @@ def clear_all_bootcamps():
 @app.route('/api/database/reset', methods=['DELETE'])
 def reset_database():
     """
-    ⚠️ PELIGRO EXTREMO: Elimina TODO el contenido de la base de datos.
+    [CRITICAL] Elimina TODO el contenido de la base de datos.
     
-    Borra estudiantes Y bootcamps. Esta operación no se puede deshacer.
+    Borra estudiantes Y bootcamps. Esta operacion no se puede deshacer.
     
     Returns:
         JSON: Resultado del reseteo completo
@@ -1432,19 +1374,19 @@ app.logger.info("⏰ Scheduler iniciado: sincronización automática cada 5 minu
 
 
 if __name__ == '__main__':
-    # Configuración para desarrollo
-    # En producción, usar un servidor WSGI como Gunicorn
+    # Configuracion para desarrollo
+    # En produccion, usar un servidor WSGI como Gunicorn
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_ENV', 'production') == 'development'
     
     print("\n" + "="*70)
-    print("  🚀 WhatsApp Messaging API Server")
+    print("  WhatsApp Messaging API Server")
     print("="*70)
-    print(f"\n  📡 Puerto: {port}")
-    print(f"  🔧 Debug: {debug}")
-    print(f"  📂 CSV: {CSV_PATH}")
-    print(f"  ⏱️  Delay entre mensajes: {DELAY_SECONDS}s")
-    print("  🔄 Sync automático: Cada 5 minutos")
+    print(f"\n  Puerto: {port}")
+    print(f"  Debug: {debug}")
+    print(f"  Database: Turso (libSQL)")
+    print(f"  Delay entre mensajes: {DELAY_SECONDS}s")
+    print("  Sync automatico: Cada 5 minutos")
     print("\n" + "="*70 + "\n")
     
     app.run(host='0.0.0.0', port=port, debug=debug)

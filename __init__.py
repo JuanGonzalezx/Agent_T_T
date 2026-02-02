@@ -1,17 +1,18 @@
 """
-Backend Flask para sistema de mensajería WhatsApp.
+Backend Flask para sistema de mensajeria WhatsApp.
 
-Este paquete proporciona una API REST completa para el envío de mensajes
-de WhatsApp, gestión de contactos y estadísticas.
+Este paquete proporciona una API REST completa para el envio de mensajes
+de WhatsApp usando Turso como fuente unica de verdad.
 
-Módulos:
+Modulos:
     - app: Servidor Flask principal con endpoints
-    - services.whatsapp_service: Comunicación con WhatsApp Business API
-    - utils.csv_handler: Gestión de archivos CSV de contactos
+    - services.whatsapp_service: Comunicacion con WhatsApp Business API
+    - services.db_handler: Gestion de base de datos Turso
+    - services.google_drive_service: Integracion con Google Drive
 
-Versión: 1.0.0
+Version: 2.0.0
 """
 
-__version__ = '1.0.0'
+__version__ = '2.0.0'
 __author__ = 'Agent_T_T'
 __all__ = ['app']

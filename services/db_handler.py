@@ -418,6 +418,59 @@ class DatabaseHandler:
             print(f"Error obteniendo estudiantes: {str(e)}")
             return []
     
+    def get_estudiantes_pendientes_envio(self) -> List[Dict[str, Any]]:
+        """
+        Obtiene estudiantes pendientes de envio de mensaje.
+        Un estudiante esta pendiente si:
+        - opt_in es TRUE/1/YES/SI
+        - estado_envio no es 'sent'
+        
+        Returns:
+            List[Dict]: Lista de estudiantes pendientes
+        """
+        try:
+            query = '''
+                SELECT * FROM estudiantes
+                WHERE (UPPER(opt_in) IN ('TRUE', '1', 'YES', 'SI'))
+                  AND (estado_envio IS NULL OR estado_envio = '' OR estado_envio != 'sent')
+                ORDER BY id ASC
+            '''
+            return self._execute_query(query, fetch_all=True) or []
+        except Exception as e:
+            print(f"Error obteniendo estudiantes pendientes: {str(e)}")
+            return []
+    
+    def update_estado_envio(self, telefono: str, estado: str, message_id: str = None) -> Tuple[bool, str]:
+        """
+        Actualiza el estado de envio de un estudiante.
+        
+        Args:
+            telefono: Numero de telefono del estudiante
+            estado: Estado del envio ('sent', 'error', etc)
+            message_id: ID del mensaje de WhatsApp (opcional)
+            
+        Returns:
+            Tuple[bool, str]: (exito, mensaje)
+        """
+        telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+        
+        try:
+            from datetime import datetime
+            fecha_envio = datetime.now().isoformat()
+            
+            query = '''
+                UPDATE estudiantes
+                SET estado_envio = ?,
+                    fecha_envio = ?,
+                    message_id = ?,
+                    fecha_actualizacion = CURRENT_TIMESTAMP
+                WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+            '''
+            self._execute_query(query, (estado, fecha_envio, message_id or '', telefono_clean))
+            return True, f"Estado actualizado a {estado}"
+        except Exception as e:
+            return False, f"Error actualizando estado: {str(e)}"
+    
     def get_estudiante_by_phone(self, telefono: str) -> List[Dict[str, Any]]:
         """
         Busca estudiantes por número de teléfono.
