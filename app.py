@@ -872,8 +872,8 @@ def webhook():
                             if is_valid_response:
                                 standardized_response = "Si" if response_normalized in valid_yes else "No"
                                 
-                                # Verificar en Turso si ya tiene respuesta (fuente de verdad)
-                                ya_respondio, respuesta_previa = db_handler.get_respuesta_existente(from_number)
+                                # Verificar en Turso si ya tiene respuesta
+                                ya_respondio, _ = db_handler.get_respuesta_existente(from_number)
                                 
                                 if ya_respondio:
                                     app.logger.warning(f"[WEBHOOK] Respuesta duplicada ignorada - {from_number}")
@@ -881,7 +881,7 @@ def webhook():
                                 
                                 app.logger.info(f"[WEBHOOK] Respuesta recibida - {from_number}: \"{standardized_response}\"")
                                 
-                                # Guardar en Turso primero (fuente de verdad)
+                                # Guardar en Turso
                                 from datetime import datetime
                                 fecha_respuesta = datetime.now().isoformat()
                                 
@@ -892,23 +892,8 @@ def webhook():
                                 )
                                 
                                 if db_success:
-                                    app.logger.info(f"[WEBHOOK] Respuesta guardada en DB - {from_number}")
+                                    app.logger.info(f"[WEBHOOK] Respuesta guardada - {from_number}")
                                     
-                                    # Actualizar CSV como backup
-                                    success, df, msg = csv_handler.load_csv()
-                                    if success:
-                                        idx = csv_handler.find_contact_by_phone(df, from_number)
-                                        if idx is not None:
-                                            df.at[idx, 'respuesta'] = standardized_response
-                                            df.at[idx, 'fecha_respuesta'] = fecha_respuesta
-                                            csv_handler.save_csv(df)
-                                    
-                                    try:
-                                        global pending_sync
-                                        pending_sync = True
-                                    except NameError:
-                                        pass
-
                                     # Enviar mensaje de confirmacion
                                     try:
                                         send_ok, send_result = whatsapp_service.send_text_message(
@@ -927,12 +912,12 @@ def webhook():
                                     app.logger.error(f"[WEBHOOK] DB update failed - {from_number}: {db_msg}")
 
                             else:
-                                app.logger.warning(f"[WEBHOOK] Respuesta invalida - {from_number}: \"{response_text}\"")
-                                
-                                # Verificar en Turso si ya respondio
+                                # Verificar en Turso si ya respondio antes de enviar mensaje de error
                                 ya_respondio, _ = db_handler.get_respuesta_existente(from_number)
                                 if ya_respondio:
                                     continue
+                                
+                                app.logger.warning(f"[WEBHOOK] Respuesta invalida - {from_number}: \"{response_text}\"")
                                 
                                 try:
                                     whatsapp_service.send_text_message(
