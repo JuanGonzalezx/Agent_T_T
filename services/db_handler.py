@@ -53,13 +53,34 @@ class DatabaseHandler:
             self.use_turso = True
             # Convertir URL de libsql a HTTP
             self.turso_http_url = self.turso_url.replace('libsql://', 'https://')
-            print(f"✅ Usando Turso (cloud): {self.turso_url}")
+            print(f"[DB] Usando Turso (cloud): {self.turso_url}")
         else:
             self.use_turso = False
             self.turso_http_url = None
-            print(f"✅ Usando SQLite local: {self.db_path}")
+            print(f"[DB] Usando SQLite local: {self.db_path}")
         
         self._init_database()
+    
+    def _extract_turso_value(self, cell):
+        """
+        Extrae el valor real de una celda de Turso.
+        
+        Turso devuelve valores como {'type': 'text', 'value': 'actual_value'}
+        o {'type': 'null'} para valores NULL.
+        
+        Args:
+            cell: Celda de Turso (puede ser dict o valor directo)
+            
+        Returns:
+            El valor extraido como string, o None si es null
+        """
+        if cell is None:
+            return None
+        if isinstance(cell, dict):
+            if cell.get('type') == 'null':
+                return None
+            return cell.get('value', '')
+        return cell
     
     def _execute_turso_query(self, query: str, params: tuple = None):
         """Ejecuta una query en Turso via HTTP."""
@@ -123,12 +144,14 @@ class DatabaseHandler:
                 # Convertir resultado de Turso a lista de diccionarios
                 rows = result.get('response', {}).get('result', {}).get('rows', [])
                 cols = [col['name'] for col in result.get('response', {}).get('result', {}).get('cols', [])]
-                return [dict(zip(cols, row)) for row in rows]
+                # Extraer valores de los objetos Turso {'type': 'text', 'value': 'actual'}
+                return [dict(zip(cols, [self._extract_turso_value(cell) for cell in row])) for row in rows]
             elif fetch_one:
                 rows = result.get('response', {}).get('result', {}).get('rows', [])
                 if rows:
                     cols = [col['name'] for col in result.get('response', {}).get('result', {}).get('cols', [])]
-                    return dict(zip(cols, rows[0]))
+                    # Extraer valores de los objetos Turso
+                    return dict(zip(cols, [self._extract_turso_value(cell) for cell in rows[0]]))
                 return None
             else:
                 # Solo ejecutar (INSERT, UPDATE, DELETE)
