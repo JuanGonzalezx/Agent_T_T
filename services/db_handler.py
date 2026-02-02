@@ -607,7 +607,7 @@ class DatabaseHandler:
             
             if result:
                 respuesta = result.get('respuesta') if isinstance(result, dict) else result[0]
-                if respuesta and str(respuesta).strip() and str(respuesta).strip().lower() != 'none':
+                if respuesta and str(respuesta).strip() and str(respuesta).strip().lower() not in ['none', 'default', 'null', '']:
                     return True, str(respuesta).strip()
             return False, None
         except Exception as e:
