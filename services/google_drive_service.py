@@ -121,8 +121,8 @@ class GoogleDriveService:
         
         Realiza:
         1. Lectura forzada como string (evita errores de tipo en teléfonos).
-        2. Eliminación de saltos de línea (\n, \r) dentro de las celdas.
-        3. Normalización de nombres de columnas (upper + strip).
+        2. Eliminación de saltos de línea (\n, \r) dentro de las celdas para evitar errores en Frontend.
+        3. Normalización de nombres de columnas (minusculas + strip).
         4. Eliminación de filas vacías.
         
         Args:
@@ -146,7 +146,7 @@ class GoogleDriveService:
                 # Leer CSV
                 df = pd.read_csv(
                     io.StringIO(text), 
-                    dtype=str,             # Forzar todo a texto
+                    dtype=str,             # Forzar todo a texto para evitar notación científica
                     keep_default_na=False, # Vacíos son strings vacíos
                     on_bad_lines='skip'    # Saltar líneas corruptas
                 )
@@ -159,16 +159,16 @@ class GoogleDriveService:
                     keep_default_na=False
                 )
 
-            # --- FASE DE LIMPIEZA DE DATOS ---
+            # --- FASE DE LIMPIEZA DE DATOS (CRÍTICO) ---
             
-            # 1. Normalizar columnas: Mayúsculas y sin espacios a los lados
-            df.columns = df.columns.astype(str).str.strip().str.upper()
+            # 1. Normalizar columnas: Minúsculas para coincidir con el JSON esperado por el frontend
+            df.columns = df.columns.astype(str).str.strip().str.lower()
             
             # 2. Eliminar filas que estén completamente vacías
             df = df.dropna(how='all')
             
-            # 3. Eliminar saltos de línea dentro de las celdas (Causa principal de errores visuales en Frontend)
-            # Reemplaza \n, \r y combinaciones por un espacio simple
+            # 3. Eliminar saltos de línea dentro de las celdas 
+            # Esto corrige el error de visualización en el frontend donde las filas se parten
             df = df.replace(r'[\r\n]+', ' ', regex=True)
             
             # 4. Trim de espacios en todas las celdas de texto
@@ -254,7 +254,7 @@ class GoogleDriveService:
             if batch_resp.status_code == 200:
                 result = batch_resp.json()
                 total_updated = result.get('totalUpdatedRows', 0)
-                return True, f"Sheet '{first_sheet_name}' actualizado: {total_updated} filas"
+                return True, f"Sheet '{first_sheet_name}' actualizado: {total_updated} filas, {len(headers_list)} columnas"
             else:
                 return False, f"Error actualizando Sheet: {batch_resp.status_code}"
                 
@@ -346,7 +346,7 @@ class GoogleDriveService:
             )
             
             if response.status_code == 200:
-                return True, f"XLSX actualizado con {len(df)} filas"
+                return True, f"XLSX actualizado con {len(df)} filas y {len(df.columns)} columnas"
             else:
                 return False, f"Error al actualizar XLSX: {response.status_code}"
                 
