@@ -3,7 +3,7 @@ Servicio para integración con Google Drive API.
 
 Este módulo encapsula toda la lógica de interacción con Google Drive,
 incluyendo descarga de archivos, actualización de Sheets/CSV/XLSX,
-y gestión de metadatos.
+y gestión de metadatos con limpieza automática de datos.
 """
 
 import io
@@ -117,7 +117,13 @@ class GoogleDriveService:
     
     def parse_file_content(self, content: bytes) -> Tuple[bool, pd.DataFrame, str]:
         """
-        Parsea el contenido de un archivo a DataFrame de pandas.
+        Parsea el contenido de un archivo a DataFrame de pandas con limpieza robusta.
+        
+        Realiza:
+        1. Lectura forzada como string (evita errores de tipo en teléfonos).
+        2. Eliminación de saltos de línea (\n, \r) dentro de las celdas.
+        3. Normalización de nombres de columnas (upper + strip).
+        4. Eliminación de filas vacías.
         
         Args:
             content: Contenido binario del archivo
@@ -129,22 +135,52 @@ class GoogleDriveService:
             return False, None, 'Archivo vacío'
         
         try:
-            # Intentar como CSV primero
-            text = content.decode('utf-8')
-            df = pd.read_csv(io.StringIO(text), dtype=str)
+            # Intentar decodificar como UTF-8 para CSV
+            try:
+                text = content.decode('utf-8')
+                is_csv = True
+            except UnicodeDecodeError:
+                is_csv = False
+
+            if is_csv:
+                # Leer CSV
+                df = pd.read_csv(
+                    io.StringIO(text), 
+                    dtype=str,             # Forzar todo a texto
+                    keep_default_na=False, # Vacíos son strings vacíos
+                    on_bad_lines='skip'    # Saltar líneas corruptas
+                )
+            else:
+                # Intentar como XLSX (binario)
+                df = pd.read_excel(
+                    io.BytesIO(content), 
+                    engine='openpyxl', 
+                    dtype=str,
+                    keep_default_na=False
+                )
+
+            # --- FASE DE LIMPIEZA DE DATOS ---
+            
+            # 1. Normalizar columnas: Mayúsculas y sin espacios a los lados
+            df.columns = df.columns.astype(str).str.strip().str.upper()
+            
+            # 2. Eliminar filas que estén completamente vacías
+            df = df.dropna(how='all')
+            
+            # 3. Eliminar saltos de línea dentro de las celdas (Causa principal de errores visuales en Frontend)
+            # Reemplaza \n, \r y combinaciones por un espacio simple
+            df = df.replace(r'[\r\n]+', ' ', regex=True)
+            
+            # 4. Trim de espacios en todas las celdas de texto
+            df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+
             return True, df, ''
             
-        except Exception:
-            try:
-                # Intentar como XLSX
-                df = pd.read_excel(io.BytesIO(content), engine='openpyxl', dtype=str)
-                return True, df, ''
-                
-            except Exception as e:
-                return False, None, 'No se pudo leer el archivo'
+        except Exception as e:
+            return False, None, f'Error procesando archivo: {str(e)}'
     
     def update_google_sheet(self, spreadsheet_id: str, access_token: str, 
-                           df: pd.DataFrame) -> Tuple[bool, str]:
+                            df: pd.DataFrame) -> Tuple[bool, str]:
         """
         Actualiza un Google Sheet con el DataFrame procesado.
         Obtiene dinámicamente el nombre de la primera hoja y actualiza todos los datos.
@@ -181,6 +217,7 @@ class GoogleDriveService:
             
             # Preparar datos: headers + valores
             headers_list = df.columns.tolist()
+            # fillna('') asegura que no enviemos 'NaN' a Google Sheets
             values_list = [headers_list] + df.fillna('').values.tolist()
             
             # Paso 1: Limpiar TODO el contenido de la hoja
@@ -217,9 +254,8 @@ class GoogleDriveService:
             if batch_resp.status_code == 200:
                 result = batch_resp.json()
                 total_updated = result.get('totalUpdatedRows', 0)
-                return True, f"Sheet '{first_sheet_name}' actualizado: {total_updated} filas, {len(headers_list)} columnas"
+                return True, f"Sheet '{first_sheet_name}' actualizado: {total_updated} filas"
             else:
-                error_text = batch_resp.text
                 return False, f"Error actualizando Sheet: {batch_resp.status_code}"
                 
         except Exception as e:
@@ -310,7 +346,7 @@ class GoogleDriveService:
             )
             
             if response.status_code == 200:
-                return True, f"XLSX actualizado con {len(df)} filas y {len(df.columns)} columnas"
+                return True, f"XLSX actualizado con {len(df)} filas"
             else:
                 return False, f"Error al actualizar XLSX: {response.status_code}"
                 
