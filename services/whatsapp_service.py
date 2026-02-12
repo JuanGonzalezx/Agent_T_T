@@ -238,25 +238,12 @@ class WhatsAppService:
     def send_template_message(self, phone: str, template_name: str, parameters: list = None, language_code: str = "es", parameter_names: list = None, has_header_param: bool = False) -> Tuple[bool, str]:
         """
         Envía un mensaje usando una plantilla pre-aprobada de WhatsApp.
-        
-        Las plantillas permiten enviar mensajes estructurados con variables
-        dinámicas. Los parámetros deben enviarse en el orden exacto de la plantilla.
-        
-        Args:
-            phone: Número de teléfono (se normalizará automáticamente)
-            template_name: Nombre de la plantilla aprobada en Meta
-            parameters: Lista ordenada de valores para las variables
-                       Deben estar en el mismo orden que en la plantilla
-            language_code: Código de idioma de la plantilla (default: "es")
-            parameter_names: No usado (compatibilidad)
-            has_header_param: Si True, el primer parámetro es para el header
-            
-        Returns:
-            Tuple[bool, str]: (éxito, message_id o mensaje_error)
+        Incluye logs de depuración para verificar payloads y respuestas.
         """
         # Validar credenciales antes de intentar enviar
         valid, msg = self.validate_credentials()
         if not valid:
+            print(f"❌ [DEBUG] Error de credenciales: {msg}")
             return False, msg
         
         # Normalizar el número de teléfono
@@ -277,9 +264,18 @@ class WhatsAppService:
             "Authorization": f"Bearer {self.access_token}"
         }
         
+        # --- INICIO DEBUG PRINT ---
+        print("\n" + "="*50)
+        print(f"🚀 [DEBUG] INTENTANDO ENVIAR A: {normalized_phone}")
+        print(f"📄 [DEBUG] PLANTILLA: {template_name} (Idioma: {language_code})")
+        print(f"🔗 [DEBUG] URL: {self.base_url}")
+        print(f"📦 [DEBUG] PAYLOAD JSON:")
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        print("="*50 + "\n")
+        # --- FIN DEBUG PRINT ---
+
         try:
             # Timeout de 30s previene bloqueos indefinidos
-            # Usar json= en lugar de data= para que requests maneje el encoding correctamente
             response = requests.post(
                 self.base_url,
                 json=payload,
@@ -287,6 +283,18 @@ class WhatsAppService:
                 timeout=30
             )
             
+            # --- INICIO DEBUG RESPUESTA ---
+            print("\n" + "="*50)
+            print(f"📩 [DEBUG] RESPUESTA DE META:")
+            print(f"🔢 [DEBUG] HTTP STATUS: {response.status_code}")
+            try:
+                print(f"📄 [DEBUG] RESPONSE BODY:")
+                print(json.dumps(response.json(), indent=2))
+            except:
+                print(f"📄 [DEBUG] RAW TEXT: {response.text}")
+            print("="*50 + "\n")
+            # --- FIN DEBUG RESPUESTA ---
+
             # Procesar respuesta exitosa
             if response.status_code == 200:
                 response_data = response.json()
@@ -306,11 +314,13 @@ class WhatsAppService:
         
         # Manejo de excepciones de red
         except requests.exceptions.Timeout:
+            print("❌ [DEBUG] Excepción: Timeout")
             return False, "Timeout: La API no respondió a tiempo"
         
         except requests.exceptions.ConnectionError:
+            print("❌ [DEBUG] Excepción: Error de conexión")
             return False, "Error de conexión: Verifica la conectividad a internet"
         
         except Exception as e:
+            print(f"❌ [DEBUG] Excepción Inesperada: {str(e)}")
             return False, f"Error inesperado: {str(e)}"
-
