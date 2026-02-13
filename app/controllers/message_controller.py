@@ -53,10 +53,16 @@ def send_batch_messages():
         template_name = data.get('template_name', 'prueba_matricula')
         language_code = data.get('language_code', 'es')
         
+        current_app.logger.info(f"[BATCH] Iniciando envío masivo con template: {template_name}")
+        
         pending_students = db_handler.get_estudiantes_pendientes_envio()
         
+        current_app.logger.info(f"[BATCH] Estudiantes pendientes encontrados: {len(pending_students)}")
+        
         if not pending_students:
-            return jsonify({'success': True, 'message': 'No hay pendientes', 'stats': db_handler.get_estadisticas()}), 200
+            stats = db_handler.get_estadisticas()
+            current_app.logger.info(f"[BATCH] No hay pendientes. Stats: {stats}")
+            return jsonify({'success': True, 'message': 'No hay pendientes', 'stats': stats}), 200
         
         current_app.logger.info(f"[SEND] Batch iniciado - {len(pending_students)} pendientes")
         
@@ -79,9 +85,13 @@ def send_batch_messages():
                 str(student.get('lugar', ''))
             ]
             
+            current_app.logger.info(f"[BATCH] Enviando a {phone} con params: {params[:2]}...")
+            
             success, result = whatsapp_service.send_template_message(
                 phone, template_name, params, language_code
             )
+            
+            current_app.logger.info(f"[BATCH] Resultado {phone}: success={success}, result={result}")
             
             # Actualizar BD
             status = 'sent' if success else 'error'

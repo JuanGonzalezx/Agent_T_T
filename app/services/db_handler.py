@@ -386,7 +386,7 @@ class DatabaseHandler:
                     lugar = excluded.lugar,
                     opt_in = excluded.opt_in,
                     estado_envio = CASE 
-                        WHEN LOWER(excluded.estado_envio) IN ('sent', 'error', 'pending') THEN excluded.estado_envio 
+                        WHEN excluded.estado_envio != '' THEN excluded.estado_envio 
                         ELSE estudiantes.estado_envio 
                     END,
                     fecha_envio = CASE 
@@ -394,15 +394,15 @@ class DatabaseHandler:
                         ELSE estudiantes.fecha_envio 
                     END,
                     message_id = CASE 
-                        WHEN excluded.message_id LIKE 'wamid.%' THEN excluded.message_id 
+                        WHEN excluded.message_id != '' THEN excluded.message_id 
                         ELSE estudiantes.message_id 
                     END,
                     respuesta = CASE 
-                        WHEN LOWER(excluded.respuesta) IN ('sí', 'si', 'no', 'yes') THEN excluded.respuesta 
+                        WHEN excluded.respuesta != '' THEN excluded.respuesta 
                         ELSE estudiantes.respuesta 
                     END,
                     fecha_respuesta = CASE 
-                        WHEN excluded.fecha_respuesta IS NOT NULL AND excluded.fecha_respuesta != '' THEN excluded.fecha_respuesta 
+                        WHEN excluded.fecha_respuesta IS NOT NULL THEN excluded.fecha_respuesta 
                         ELSE estudiantes.fecha_respuesta 
                     END,
                     fecha_actualizacion = CURRENT_TIMESTAMP
@@ -446,21 +446,28 @@ class DatabaseHandler:
         Obtiene estudiantes pendientes de envio de mensaje.
         Un estudiante esta pendiente si:
         - opt_in es TRUE/1/YES/SI
-        - estado_envio es NULL o vacío (NUNCA se le ha enviado)
-        
-        NOTA: No incluye 'error' - esos deben reenviarse manualmente.
+        - estado_envio no es 'sent'
         
         Returns:
             List[Dict]: Lista de estudiantes pendientes
         """
         try:
+            # DEBUG: Primero ver todos los estudiantes
+            all_query = 'SELECT telefono_e164, opt_in, estado_envio FROM estudiantes'
+            all_students = self._execute_query(all_query, fetch_all=True) or []
+            print(f"[DEBUG] Total estudiantes en BD: {len(all_students)}")
+            for s in all_students[:5]:  # Mostrar primeros 5
+                print(f"[DEBUG] - Tel: {s.get('telefono_e164')}, opt_in: '{s.get('opt_in')}', estado: '{s.get('estado_envio')}'")
+            
             query = '''
                 SELECT * FROM estudiantes
-                WHERE (UPPER(opt_in) IN ('TRUE', '1', 'YES', 'SI'))
-                  AND (estado_envio IS NULL OR estado_envio = '' OR LOWER(estado_envio) = 'pending')
+                WHERE (UPPER(TRIM(opt_in)) IN ('TRUE', '1', 'YES', 'SI'))
+                  AND (estado_envio IS NULL OR TRIM(estado_envio) = '' OR TRIM(estado_envio) = 'default' OR estado_envio != 'sent')
                 ORDER BY id ASC
             '''
-            return self._execute_query(query, fetch_all=True) or []
+            result = self._execute_query(query, fetch_all=True) or []
+            print(f"[DEBUG] Estudiantes pendientes encontrados: {len(result)}")
+            return result
         except Exception as e:
             print(f"Error obteniendo estudiantes pendientes: {str(e)}")
             return []
