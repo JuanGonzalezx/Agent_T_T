@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.agent.state import AgentState
 
-# 💡 AHORA IMPORTAMOS DE LA CARPETA 'nodes' QUE CREAMOS
+# Importamos de la carpeta 'nodes'
 from app.agent.nodes import (
     load_context_node,
     check_status_node,
@@ -15,19 +15,17 @@ from app.agent.nodes import (
 
 logger = logging.getLogger(__name__)
 
-# 1. Configuración del Modelo Gemini
+# 1. Configuración del Modelo Gemini (Router)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite",
-    temperature=0.1,  # Un poco de variabilidad para respuestas más naturales
-    max_tokens=100,   # Limitado ya que solo clasificamos
+    model="gemini-2.5-flash-lite", # O el que estés usando y no te dé error
+    temperature=0.0,  # 0.0 para el Router porque queremos precisión matemática, no creatividad
+    max_tokens=10,    # Solo necesitamos 1 palabra de respuesta
     timeout=30,
     max_retries=2,
 )
 
 def router(state: AgentState):
-    """
-    El Router lee el mensaje y decide a qué experto enviarlo.
-    """
+    """El Router lee el mensaje y decide a qué experto enviarlo."""
     messages = state.get('messages', [])
     
     if not messages:
@@ -55,29 +53,38 @@ def router(state: AgentState):
         estado_envio = student_data.get('estado_envio', '')
         respuesta_actual = student_data.get('respuesta', '')
         
-        # ¿Está en la "sala de interrogatorios"? (Le enviaron mensaje y no ha respondido)
         espera_confirmacion = (
             estado_envio == 'sent' and 
             (not respuesta_actual or respuesta_actual.strip() == '' or respuesta_actual.strip().lower() == 'default')
         )
         
         if espera_confirmacion:
-            # Si está esperando confirmación, TODO LO QUE DIGA va al nodo de confirmación.
-            # No usamos IA. El nodo confirm.py se encargará de regañarlo si no dice Sí/No.
             logger.info("[ROUTER] Estudiante en modo de confirmación estricta.")
             return {"intent": "CONFIRM"}
-    
+            
     # ==========================================================
-    # 🧠 FLUJO 2 y 3: Si ya confirmó, usamos Gemini para soporte
+    # 🚀 ESCUDO ANTI-CUOTAS (FAST-PATH)
+    # ==========================================================
+    # Si detecta palabras exactas del menú, ataja sin usar IA (ahorra saldo y tiempo)
+    if last_msg in ['estado', 'estado de matrícula', 'estado de matricula', 'mi estado', 'como voy']:
+        logger.info("[ROUTER] Fast-Path: Detectado STATUS")
+        return {"intent": "STATUS"}
+        
+    if last_msg in ['acceso', 'acceso plataforma', 'acceso a la plataforma', 'plataforma', 'claves']:
+        logger.info("[ROUTER] Fast-Path: Detectado ACCESS")
+        return {"intent": "ACCESS"}
+
+    # ==========================================================
+    # 🧠 FLUJO 2, 3 y FAQ: Usamos Gemini para intenciones complejas
     # ==========================================================
     system_prompt = (
         "Eres un clasificador de intenciones para la mesa de ayuda de Talento Tech.\n"
         "Analiza el mensaje del usuario y responde ÚNICAMENTE con una de estas palabras clave:\n\n"
-        "STATUS -> Si pregunta por estado de matrícula, inscripción, '¿cómo voy?', 'estado de matrícula', 'mi estado', fechas.\n"
-        "ACCESS -> Si menciona plataforma, clave, usuario, link, 'no puedo entrar', 'acceso plataforma', 'acceso'.\n"
-        "GENERAL -> SOLO para saludos como 'hola', 'gracias', despedidas, o temas completamente fuera de contexto.\n\n"
+        "STATUS -> Si pregunta por su propio estado de matrícula, inscripción, '¿cómo voy?', 'mi estado'.\n"
+        "ACCESS -> Si menciona problemas con la plataforma, clave, usuario, link de Moodle, 'no puedo entrar'.\n"
+        "GENERAL -> Si hace PREGUNTAS FRECUENTES del programa (qué es, horarios, duración, certificados, cómo inscribirse, inglés), o si saluda, agradece, se despide, pide ayuda, o habla de temas fuera de contexto.\n\n"
         f"Mensaje del usuario: \"{last_msg}\"\n\n"
-        "Responde con UNA sola palabra: STATUS, ACCESS, o GENERAL." # Quitamos CONFIRM de Gemini
+        "Responde con UNA sola palabra: STATUS, ACCESS, o GENERAL."
     )
     
     try:
@@ -107,11 +114,11 @@ def decide_next_node(state: AgentState):
     if intent == 'ACCESS': return "platform_access"
     
     return "general_response"
-# 2. Construcción del Grafo
+
+# Construcción del Grafo
 def build_agent_graph():
     workflow = StateGraph(AgentState)
     
-    # Agregar Nodos (Expertos)
     workflow.add_node("load_context", load_context_node)
     workflow.add_node("router_gemini", router)
     workflow.add_node("confirm_response", confirm_response_node)
@@ -119,11 +126,9 @@ def build_agent_graph():
     workflow.add_node("platform_access", platform_access_node)
     workflow.add_node("general_response", llm_fallback_node)
     
-    # Conectar Nodos (Flujo)
     workflow.set_entry_point("load_context")
     workflow.add_edge("load_context", "router_gemini")
     
-    # Aristas Condicionales
     workflow.add_conditional_edges(
         "router_gemini",
         decide_next_node,
@@ -135,7 +140,6 @@ def build_agent_graph():
         }
     )
     
-    # Finalizar
     workflow.add_edge("confirm_response", END)
     workflow.add_edge("check_status", END)
     workflow.add_edge("platform_access", END)
@@ -143,9 +147,7 @@ def build_agent_graph():
     
     return workflow.compile()
 
-# Singleton para importar
 _agent_instance = None
-
 def get_agent():
     global _agent_instance
     if not _agent_instance:
