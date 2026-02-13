@@ -1,8 +1,9 @@
 import os
+from dotenv import load_dotenv
 import atexit
 from flask import Flask, jsonify
 from flask_cors import CORS
-
+load_dotenv()
 # Importar Servicios (Asegúrate de haber movido los archivos a app/services/)
 from app.services.whatsapp_service import WhatsAppService
 from app.services.google_drive_service import GoogleDriveService
