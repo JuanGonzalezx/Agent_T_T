@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # 1. Configuración del Modelo Gemini
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash",
+    model="gemini-2.0-flash-lite",
     temperature=0.1,  # Un poco de variabilidad para respuestas más naturales
     max_tokens=100,   # Limitado ya que solo clasificamos
     timeout=30,
