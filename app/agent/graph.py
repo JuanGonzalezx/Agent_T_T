@@ -79,11 +79,46 @@ def router(state: AgentState):
     return {"intent": intent}
 
 def decide_next_node(state: AgentState):
-    """Semáforo que dirige el tráfico según la intención."""
+    """
+    Semáforo que dirige el tráfico según la intención.
+    
+    IMPORTANTE: CONFIRM solo aplica si:
+    - El estudiante tiene estado_envio='sent' (secretaria le envió template)
+    - El estudiante NO ha respondido todavía (respuesta vacía)
+    """
     intent = state.get('intent')
-    if intent == 'CONFIRM': return "confirm_response"
+    student_data = state.get('student_data')
+    
+    # Validar si CONFIRM es aplicable
+    if intent == 'CONFIRM':
+        if student_data:
+            estado_envio = student_data.get('estado_envio', '')
+            respuesta_actual = student_data.get('respuesta', '')
+            
+            # Solo procesar CONFIRM si:
+            # 1. La secretaria envió el mensaje (estado_envio = 'sent')
+            # 2. El estudiante NO ha respondido todavía (vacío o 'default')
+            respuesta_vacia = (
+                not respuesta_actual or 
+                respuesta_actual.strip() == '' or 
+                respuesta_actual.strip().lower() == 'default'
+            )
+            espera_confirmacion = (estado_envio == 'sent' and respuesta_vacia)
+            
+            if espera_confirmacion:
+                logger.info(f"[ROUTER] Estudiante esperando confirmación → CONFIRM")
+                return "confirm_response"
+            else:
+                logger.info(f"[ROUTER] Estudiante ya respondió o no tiene envío pendiente → GENERAL")
+                return "general_response"
+        else:
+            # No hay datos del estudiante
+            logger.info(f"[ROUTER] Sin datos de estudiante → GENERAL")
+            return "general_response"
+    
     if intent == 'STATUS': return "check_status"
     if intent == 'ACCESS': return "platform_access"
+    return "general_response"
     return "general_response"
 
 # 2. Construcción del Grafo

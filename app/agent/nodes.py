@@ -26,7 +26,7 @@ def load_context_node(state: AgentState):
     except Exception as e:
         logger.error(f"[AGENT] Error cargando contexto: {e}")
         
-    return {"student_name": None, "student_data": None}
+    return {"student_name": "Estudiante", "student_data": None}
 
 # --- NODO 2: ESTADO DE INSCRIPCIÓN ---
 def check_status_node(state: AgentState):
@@ -111,7 +111,7 @@ def confirm_response_node(state: AgentState):
         respuesta = 'No'
     
     if not respuesta:
-        msg = "No entendí tu respuesta. Por favor responde *SÍ* o *NO*."
+        msg = "Solamente puedes responder *SÍ* o *NO* para confirmar tu matrícula."
         return {"messages": [AIMessage(content=msg)]}
     
     # Verificar registro existe
@@ -119,14 +119,11 @@ def confirm_response_node(state: AgentState):
         msg = "No encontré tu registro. 🧐 ¿Te inscribiste con este número?"
         return {"messages": [AIMessage(content=msg)]}
     
-    # Verificar si ya respondió
-    try:
-        ya_respondio, respuesta_anterior = db_handler.get_respuesta_existente(phone)
-        if ya_respondio and respuesta_anterior:
-            msg = f"Ya registramos tu respuesta anterior: *{respuesta_anterior}*. Si necesitas cambiarla, contacta a soporte."
-            return {"messages": [AIMessage(content=msg)]}
-    except Exception as e:
-        logger.error(f"[AGENT] Error verificando respuesta: {e}")
+    # Verificar si ya respondió (doble validación por seguridad)
+    respuesta_actual = data.get('respuesta', '')
+    if respuesta_actual and respuesta_actual.strip() != '' and respuesta_actual.strip().lower() != 'default':
+        msg = f"Ya registramos tu respuesta anterior: *{respuesta_actual}*. Si necesitas cambiarla, contacta a soporte."
+        return {"messages": [AIMessage(content=msg)]}
     
     # Guardar respuesta
     try:
@@ -151,5 +148,34 @@ def confirm_response_node(state: AgentState):
 
 # --- NODO 5: RESPUESTA GENÉRICA ---
 def llm_fallback_node(state: AgentState):
-    msg = "Soy el asistente virtual de Talento Tech. Puedo ayudarte con tu estado de matrícula o acceso a la plataforma."
+    """Respuesta contextual para mensajes generales."""
+    messages = state.get('messages', [])
+    name = state.get('student_name') or 'Estudiante'
+    
+    # Obtener el mensaje del usuario
+    if messages:
+        last_message = messages[-1]
+        if hasattr(last_message, 'content'):
+            text = last_message.content.strip().lower()
+        elif isinstance(last_message, dict):
+            text = last_message.get('content', '').strip().lower()
+        else:
+            text = str(last_message).strip().lower()
+    else:
+        text = ""
+    
+    # Respuestas contextuales
+    agradecimientos = ['gracias', 'vale', 'ok', 'listo', 'perfecto', 'genial', 'entendido', 'claro']
+    saludos = ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'hi']
+    despedidas = ['chao', 'adiós', 'bye', 'hasta luego', 'nos vemos']
+    
+    if any(p in text for p in agradecimientos):
+        msg = f"¡Con gusto, {name}! Si necesitas algo más, aquí estoy. 😊"
+    elif any(p in text for p in saludos):
+        msg = f"¡Hola {name}! 👋 Soy el asistente virtual de Talento Tech.\n\nPuedo ayudarte con:\n• Estado de matrícula\n• Acceso a la plataforma\n\n¿En qué te puedo ayudar?"
+    elif any(p in text for p in despedidas):
+        msg = f"¡Hasta pronto, {name}! 🙌"
+    else:
+        msg = "Soy el asistente virtual de Talento Tech. Puedo ayudarte con tu estado de matrícula o acceso a la plataforma."
+    
     return {"messages": [AIMessage(content=msg)]}
