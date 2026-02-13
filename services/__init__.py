@@ -1,10 +1,10 @@
-"""
-Archivo de inicialización para el paquete de servicios.
+# """
+# Archivo de inicialización para el paquete de servicios.
 
-Este archivo permite importar los servicios de forma más limpia desde
-otros módulos del proyecto.
-"""
+# Este archivo permite importar los servicios de forma más limpia desde
+# otros módulos del proyecto.
+# """
 
-from .whatsapp_service import WhatsAppService
+# from .whatsapp_service import WhatsAppService
 
-__all__ = ['WhatsAppService']
+# __all__ = ['WhatsAppService']
