@@ -65,3 +65,33 @@ def create_app():
         return jsonify({'success': False, 'error': 'Error interno del servidor'}), 500
 
     return app
+
+
+# =============================================================================
+# METADATA DEL PAQUETE
+# =============================================================================
+"""
+Backend Flask para sistema de mensajería WhatsApp.
+
+Este paquete proporciona una API REST completa para el envío de mensajes
+de WhatsApp usando Turso como fuente única de verdad.
+
+Módulos:
+    - controllers: Endpoints HTTP (webhooks, mensajes, estudiantes, etc.)
+    - services: Servicios externos (WhatsApp API, Drive, Turso)
+    - core: Lógica de negocio (procesamiento de respuestas)
+    - agent: Agente IA con LangGraph (futuro)
+    - utils: Utilidades de normalización de datos
+"""
+
+__version__ = '2.0.0'
+__author__ = 'Agent_T_T'
+__all__ = ['create_app', 'app', 'whatsapp_service', 'db_handler', 'google_drive_service']
+
+
+# =============================================================================
+# INSTANCIA WSGI PARA PRODUCCIÓN
+# =============================================================================
+# Gunicorn y otros servidores WSGI buscan: gunicorn app:app
+# Esta instancia se crea al importar el paquete
+app = create_app()
