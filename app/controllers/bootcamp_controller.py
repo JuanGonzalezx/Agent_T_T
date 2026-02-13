@@ -3,6 +3,7 @@ from app import db_handler
 
 bootcamp_bp = Blueprint('bootcamps', __name__)
 
+@bootcamp_bp.route('', methods=['GET'])
 @bootcamp_bp.route('/', methods=['GET'])
 def get_all():
     try:
