@@ -3,6 +3,8 @@ import logging
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.agent.state import AgentState
+
+# 💡 AHORA IMPORTAMOS DE LA CARPETA 'nodes' QUE CREAMOS
 from app.agent.nodes import (
     load_context_node,
     check_status_node,
@@ -14,14 +16,12 @@ from app.agent.nodes import (
 logger = logging.getLogger(__name__)
 
 # 1. Configuración del Modelo Gemini
-# Usamos 'gemini-2.0-flash' (modelo más reciente y rápido)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0,
-    max_tokens=None,
-    timeout=None,
+    model="gemini-2.0-flash",
+    temperature=0.1,  # Un poco de variabilidad para respuestas más naturales
+    max_tokens=100,   # Limitado ya que solo clasificamos
+    timeout=30,
     max_retries=2,
-    # La API Key la toma automáticamente de os.environ["GOOGLE_API_KEY"]
 )
 
 def router(state: AgentState):
@@ -37,17 +37,22 @@ def router(state: AgentState):
     # Obtener el contenido del último mensaje
     last_message = messages[-1]
     
-    # Manejar tanto objetos LangChain como diccionarios
     if hasattr(last_message, 'content'):
-        last_msg = last_message.content
+        last_msg = last_message.content.strip().lower()
     elif isinstance(last_message, dict):
-        last_msg = last_message.get('content', '')
+        last_msg = last_message.get('content', '').strip().lower()
     else:
-        last_msg = str(last_message)
+        last_msg = str(last_message).strip().lower()
     
     logger.info(f"[ROUTER] Procesando mensaje: '{last_msg}'")
     
-    # Prompt de Sistema para Clasificación
+    # 🚀 FAST-PATH: Ahorrar tokens y tiempo si el usuario presionó Sí/No
+    botones_confirmacion = ['si', 'sí', 'no', 'acepto', 'rechazar', 'cancelar']
+    if last_msg in botones_confirmacion:
+        logger.info("[ROUTER] Fast-Path: Detectado botón de confirmación.")
+        return {"intent": "CONFIRM"}
+    
+    # Si no es un botón, usamos Gemini
     system_prompt = (
         "Eres un clasificador de intenciones para la mesa de ayuda de Talento Tech.\n"
         "Analiza el mensaje del usuario y responde ÚNICAMENTE con una de estas palabras clave:\n\n"
@@ -64,7 +69,7 @@ def router(state: AgentState):
         raw_intent = response.content.strip().upper()
         logger.info(f"[ROUTER] Gemini respuesta raw: '{raw_intent}'")
         
-        # Limpieza de seguridad por si el modelo responde con texto extra
+        # Limpieza de seguridad
         if "CONFIRM" in raw_intent: intent = "CONFIRM"
         elif "STATUS" in raw_intent: intent = "STATUS"
         elif "ACCESS" in raw_intent: intent = "ACCESS"
@@ -79,46 +84,34 @@ def router(state: AgentState):
     return {"intent": intent}
 
 def decide_next_node(state: AgentState):
-    """
-    Semáforo que dirige el tráfico según la intención.
-    
-    IMPORTANTE: CONFIRM solo aplica si:
-    - El estudiante tiene estado_envio='sent' (secretaria le envió template)
-    - El estudiante NO ha respondido todavía (respuesta vacía)
-    """
+    """Semáforo que dirige el tráfico según la intención."""
     intent = state.get('intent')
     student_data = state.get('student_data')
     
-    # Validar si CONFIRM es aplicable
+    # Validar si CONFIRM es aplicable según lógica de negocio
     if intent == 'CONFIRM':
         if student_data:
             estado_envio = student_data.get('estado_envio', '')
             respuesta_actual = student_data.get('respuesta', '')
             
-            # Solo procesar CONFIRM si:
-            # 1. La secretaria envió el mensaje (estado_envio = 'sent')
-            # 2. El estudiante NO ha respondido todavía (vacío o 'default')
             respuesta_vacia = (
                 not respuesta_actual or 
                 respuesta_actual.strip() == '' or 
                 respuesta_actual.strip().lower() == 'default'
             )
+            
             espera_confirmacion = (estado_envio == 'sent' and respuesta_vacia)
             
             if espera_confirmacion:
-                logger.info(f"[ROUTER] Estudiante esperando confirmación → CONFIRM")
                 return "confirm_response"
             else:
-                logger.info(f"[ROUTER] Estudiante ya respondió o no tiene envío pendiente → GENERAL")
                 return "general_response"
         else:
-            # No hay datos del estudiante
-            logger.info(f"[ROUTER] Sin datos de estudiante → GENERAL")
             return "general_response"
     
     if intent == 'STATUS': return "check_status"
     if intent == 'ACCESS': return "platform_access"
-    return "general_response"
+    
     return "general_response"
 
 # 2. Construcción del Grafo
