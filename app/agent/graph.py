@@ -46,22 +46,38 @@ def router(state: AgentState):
     
     logger.info(f"[ROUTER] Procesando mensaje: '{last_msg}'")
     
-    # 🚀 FAST-PATH: Ahorrar tokens y tiempo si el usuario presionó Sí/No
-    botones_confirmacion = ['si', 'sí', 'no', 'acepto', 'rechazar', 'cancelar']
-    if last_msg in botones_confirmacion:
-        logger.info("[ROUTER] Fast-Path: Detectado botón de confirmación.")
-        return {"intent": "CONFIRM"}
+    # ==========================================================
+    # 🔒 REGLA DE ORO DEL FLUJO 1: Modo "Confirmación Estricta"
+    # ==========================================================
+    student_data = state.get('student_data')
     
-    # Si no es un botón, usamos Gemini
+    if student_data:
+        estado_envio = student_data.get('estado_envio', '')
+        respuesta_actual = student_data.get('respuesta', '')
+        
+        # ¿Está en la "sala de interrogatorios"? (Le enviaron mensaje y no ha respondido)
+        espera_confirmacion = (
+            estado_envio == 'sent' and 
+            (not respuesta_actual or respuesta_actual.strip() == '' or respuesta_actual.strip().lower() == 'default')
+        )
+        
+        if espera_confirmacion:
+            # Si está esperando confirmación, TODO LO QUE DIGA va al nodo de confirmación.
+            # No usamos IA. El nodo confirm.py se encargará de regañarlo si no dice Sí/No.
+            logger.info("[ROUTER] Estudiante en modo de confirmación estricta.")
+            return {"intent": "CONFIRM"}
+    
+    # ==========================================================
+    # 🧠 FLUJO 2 y 3: Si ya confirmó, usamos Gemini para soporte
+    # ==========================================================
     system_prompt = (
         "Eres un clasificador de intenciones para la mesa de ayuda de Talento Tech.\n"
         "Analiza el mensaje del usuario y responde ÚNICAMENTE con una de estas palabras clave:\n\n"
-        "CONFIRM -> Si el mensaje es una confirmación o negación simple: 'sí', 'si', 'no', 'acepto', 'confirmo', 'rechazo', 'yes', 'ok'.\n"
         "STATUS -> Si pregunta por estado de matrícula, inscripción, '¿cómo voy?', 'estado de matrícula', 'mi estado', fechas.\n"
         "ACCESS -> Si menciona plataforma, clave, usuario, link, 'no puedo entrar', 'acceso plataforma', 'acceso'.\n"
         "GENERAL -> SOLO para saludos como 'hola', 'gracias', despedidas, o temas completamente fuera de contexto.\n\n"
         f"Mensaje del usuario: \"{last_msg}\"\n\n"
-        "Responde con UNA sola palabra: CONFIRM, STATUS, ACCESS, o GENERAL."
+        "Responde con UNA sola palabra: STATUS, ACCESS, o GENERAL." # Quitamos CONFIRM de Gemini
     )
     
     try:
@@ -70,8 +86,7 @@ def router(state: AgentState):
         logger.info(f"[ROUTER] Gemini respuesta raw: '{raw_intent}'")
         
         # Limpieza de seguridad
-        if "CONFIRM" in raw_intent: intent = "CONFIRM"
-        elif "STATUS" in raw_intent: intent = "STATUS"
+        if "STATUS" in raw_intent: intent = "STATUS"
         elif "ACCESS" in raw_intent: intent = "ACCESS"
         else: intent = "GENERAL"
         
@@ -86,34 +101,12 @@ def router(state: AgentState):
 def decide_next_node(state: AgentState):
     """Semáforo que dirige el tráfico según la intención."""
     intent = state.get('intent')
-    student_data = state.get('student_data')
     
-    # Validar si CONFIRM es aplicable según lógica de negocio
-    if intent == 'CONFIRM':
-        if student_data:
-            estado_envio = student_data.get('estado_envio', '')
-            respuesta_actual = student_data.get('respuesta', '')
-            
-            respuesta_vacia = (
-                not respuesta_actual or 
-                respuesta_actual.strip() == '' or 
-                respuesta_actual.strip().lower() == 'default'
-            )
-            
-            espera_confirmacion = (estado_envio == 'sent' and respuesta_vacia)
-            
-            if espera_confirmacion:
-                return "confirm_response"
-            else:
-                return "general_response"
-        else:
-            return "general_response"
-    
+    if intent == 'CONFIRM': return "confirm_response"
     if intent == 'STATUS': return "check_status"
     if intent == 'ACCESS': return "platform_access"
     
     return "general_response"
-
 # 2. Construcción del Grafo
 def build_agent_graph():
     workflow = StateGraph(AgentState)
