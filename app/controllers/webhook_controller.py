@@ -62,14 +62,23 @@ def webhook():
                         text_body = message['text']['body']
                     elif message['type'] == 'button':
                         text_body = message['button']['text']
-                    
+                    elif message['type'] == 'interactive':
+                        interactive = message.get('interactive', {})
+                        if interactive.get('type') == 'button_reply':
+                            text_body = interactive['button_reply'].get('title', '')
+                        elif interactive.get('type') == 'list_reply':
+                            text_body = interactive['list_reply'].get('title', '')
                     if from_number and text_body:
                         # INVOCAR LANGGRAPH
+                        from langchain_core.messages import HumanMessage
+                        
                         agent = get_agent()
                         inputs = {
-                            "messages": [{"role": "user", "content": text_body}],
+                            "messages": [HumanMessage(content=text_body)],
                             "phone": from_number
                         }
+                        
+                        current_app.logger.info(f"🧠 [IA] Mensaje: '{text_body}' de {from_number}")
                         
                         # Ejecutar grafo
                         result = agent.invoke(inputs)

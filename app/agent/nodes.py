@@ -74,7 +74,82 @@ def platform_access_node(state: AgentState):
         
     return {"messages": [AIMessage(content=msg)]}
 
-# --- NODO 4: RESPUESTA GENÉRICA ---
+# --- NODO 4: CONFIRMACIÓN SÍ/NO ---
+def confirm_response_node(state: AgentState):
+    """Procesa respuestas de confirmación (Sí/No) y guarda en BD."""
+    from datetime import datetime
+    from app import db_handler
+    
+    phone = state.get('phone')
+    data = state.get('student_data')
+    name = state.get('student_name', 'Estudiante')
+    
+    # Obtener el mensaje original
+    messages = state.get('messages', [])
+    if not messages:
+        return {"messages": [AIMessage(content="No recibí tu mensaje.")]}
+    
+    # Manejar tanto objetos LangChain como diccionarios
+    last_message = messages[-1]
+    if hasattr(last_message, 'content'):
+        text = last_message.content.strip().lower()
+    elif isinstance(last_message, dict):
+        text = last_message.get('content', '').strip().lower()
+    else:
+        text = str(last_message).strip().lower()
+    
+    logger.info(f"[AGENT] Procesando confirmación: '{text}' de {phone}")
+    
+    # Detectar respuesta
+    si_patterns = ['sí', 'si', 'yes', 'acepto', 'confirmo', 'ok', 'dale', 'claro', 'listo']
+    no_patterns = ['no', 'rechazo', 'cancelar', 'cancela', 'rechazar']
+    
+    respuesta = None
+    if any(p in text for p in si_patterns):
+        respuesta = 'Sí'
+    elif any(p in text for p in no_patterns):
+        respuesta = 'No'
+    
+    if not respuesta:
+        msg = "No entendí tu respuesta. Por favor responde *SÍ* o *NO*."
+        return {"messages": [AIMessage(content=msg)]}
+    
+    # Verificar registro existe
+    if not data:
+        msg = "No encontré tu registro. 🧐 ¿Te inscribiste con este número?"
+        return {"messages": [AIMessage(content=msg)]}
+    
+    # Verificar si ya respondió
+    try:
+        ya_respondio, respuesta_anterior = db_handler.get_respuesta_existente(phone)
+        if ya_respondio and respuesta_anterior:
+            msg = f"Ya registramos tu respuesta anterior: *{respuesta_anterior}*. Si necesitas cambiarla, contacta a soporte."
+            return {"messages": [AIMessage(content=msg)]}
+    except Exception as e:
+        logger.error(f"[AGENT] Error verificando respuesta: {e}")
+    
+    # Guardar respuesta
+    try:
+        fecha = datetime.now().isoformat()
+        success, message = db_handler.update_respuesta(phone, respuesta, fecha)
+        
+        if success:
+            if respuesta == 'Sí':
+                msg = f"🎉 ¡Excelente {name}! Tu confirmación ha sido registrada.\n\n¡Nos vemos pronto en clase!"
+            else:
+                msg = f"😔 Lamentamos que no puedas participar, {name}. Si cambias de opinión, contáctanos."
+            logger.info(f"[AGENT] Respuesta '{respuesta}' guardada para {phone}")
+        else:
+            msg = "Hubo un error registrando tu respuesta. Intenta de nuevo."
+            logger.error(f"[AGENT] Error guardando respuesta: {message}")
+            
+    except Exception as e:
+        logger.error(f"[AGENT] Excepción guardando respuesta: {e}")
+        msg = "Error interno. Por favor intenta más tarde."
+    
+    return {"messages": [AIMessage(content=msg)]}
+
+# --- NODO 5: RESPUESTA GENÉRICA ---
 def llm_fallback_node(state: AgentState):
     msg = "Soy el asistente virtual de Talento Tech. Puedo ayudarte con tu estado de matrícula o acceso a la plataforma."
     return {"messages": [AIMessage(content=msg)]}
