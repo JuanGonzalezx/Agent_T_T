@@ -1,7 +1,9 @@
 import os
+import threading
 from flask import Blueprint, request, jsonify, current_app
 from app import logic_brain  # Tu cerebro RegEx (Instancia Global)
 from app.agent.graph import get_agent # Tu cerebro Gemini
+from app.utils.message_dedup import get_deduplicator
 
 webhook_bp = Blueprint('webhook', __name__)
 
@@ -54,7 +56,14 @@ def webhook():
                 
                 if messages:
                     message = messages[0]
+                    message_id = message.get('id', '')  # wamid de Meta
                     from_number = message.get('from')
+                    
+                    # === DEDUPLICACIÓN: Evitar procesar el mismo mensaje múltiples veces ===
+                    dedup = get_deduplicator()
+                    if dedup.check_and_mark(message_id):
+                        current_app.logger.info(f"[DEDUP] ⏭️ Mensaje duplicado ignorado: {message_id[:20]}...")
+                        return jsonify({'status': 'duplicate_ignored'}), 200
                     
                     # Extraer texto (soporte simple para texto y botones)
                     text_body = ""
@@ -68,29 +77,36 @@ def webhook():
                             text_body = interactive['button_reply'].get('title', '')
                         elif interactive.get('type') == 'list_reply':
                             text_body = interactive['list_reply'].get('title', '')
+                    
                     if from_number and text_body:
-                        # INVOCAR LANGGRAPH
-                        from langchain_core.messages import HumanMessage
+                        # Procesar en background thread para responder 200 rápido
+                        def process_message():
+                            try:
+                                from langchain_core.messages import HumanMessage
+                                from flask import current_app
+                                from app import whatsapp_service
+                                
+                                agent = get_agent()
+                                inputs = {
+                                    "messages": [HumanMessage(content=text_body)],
+                                    "phone": from_number
+                                }
+                                
+                                result = agent.invoke(inputs)
+                                bot_response = result['messages'][-1].content
+                                whatsapp_service.send_text_message(from_number, bot_response)
+                                
+                            except Exception as e:
+                                import logging
+                                logging.getLogger(__name__).error(f"[WEBHOOK-BG] Error procesando: {e}")
                         
-                        agent = get_agent()
-                        inputs = {
-                            "messages": [HumanMessage(content=text_body)],
-                            "phone": from_number
-                        }
+                        current_app.logger.info(f"🧠 [IA] Mensaje: '{text_body}' de {from_number} (id: {message_id[:15]}...)")
                         
-                        current_app.logger.info(f"🧠 [IA] Mensaje: '{text_body}' de {from_number}")
-                        
-                        # Ejecutar grafo
-                        result = agent.invoke(inputs)
-                        
-                        # Obtener la última respuesta del bot
-                        bot_response = result['messages'][-1].content
-                        
-                        # Enviar respuesta por WhatsApp
-                        from app import whatsapp_service
-                        whatsapp_service.send_text_message(from_number, bot_response)
+                        # Lanzar procesamiento en background
+                        thread = threading.Thread(target=process_message, daemon=True)
+                        thread.start()
                 
-                return jsonify({'status': 'processed_by_ai'}), 200
+                return jsonify({'status': 'accepted'}), 200
             
             else:
                 # === MODO 2: MVP CLÁSICO (REGEX SÍ/NO) ===

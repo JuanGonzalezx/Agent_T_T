@@ -3,6 +3,7 @@ import logging
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.agent.state import AgentState
+from app.utils.gemini_logger import invoke_with_logging, log_token_usage
 
 # Importamos de la carpeta 'nodes'
 from app.agent.nodes import (
@@ -10,14 +11,15 @@ from app.agent.nodes import (
     check_status_node,
     platform_access_node,
     confirm_response_node,
-    llm_fallback_node
+    llm_fallback_node,
+    quick_response_node
 )
 
 logger = logging.getLogger(__name__)
 
 # 1. Configuración del Modelo Gemini (Router)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite", # O el que estés usando y no te dé error
+    model="gemini-2.0-flash-lite", # O el que estés usando y no te dé error
     temperature=0.0,  # 0.0 para el Router porque queremos precisión matemática, no creatividad
     max_tokens=10,    # Solo necesitamos 1 palabra de respuesta
     timeout=30,
@@ -63,32 +65,60 @@ def router(state: AgentState):
             return {"intent": "CONFIRM"}
             
     # ==========================================================
-    # 🚀 ESCUDO ANTI-CUOTAS (FAST-PATH)
+    # 🚀 ESCUDO ANTI-CUOTAS (FAST-PATH EXPANDIDO)
     # ==========================================================
-    # Si detecta palabras exactas del menú, ataja sin usar IA (ahorra saldo y tiempo)
-    if last_msg in ['estado', 'estado de matrícula', 'estado de matricula', 'mi estado', 'como voy']:
-        logger.info("[ROUTER] Fast-Path: Detectado STATUS")
+    # Detectar patrones comunes SIN usar IA (ahorra tokens y tiempo)
+    
+    # STATUS patterns
+    status_keywords = ['estado', 'matrícula', 'matricula', 'inscripción', 'inscripcion', 
+                       'como voy', 'cómo voy', 'mi estado', 'estoy inscrito']
+    if any(kw in last_msg for kw in status_keywords):
+        logger.info("[ROUTER] Fast-Path: STATUS")
         return {"intent": "STATUS"}
-        
-    if last_msg in ['acceso', 'acceso plataforma', 'acceso a la plataforma', 'plataforma', 'claves']:
-        logger.info("[ROUTER] Fast-Path: Detectado ACCESS")
+    
+    # ACCESS patterns  
+    access_keywords = ['acceso', 'plataforma', 'clave', 'contraseña', 'usuario', 
+                       'entrar', 'ingresar', 'moodle', 'login', 'credenciales']
+    if any(kw in last_msg for kw in access_keywords):
+        logger.info("[ROUTER] Fast-Path: ACCESS")
         return {"intent": "ACCESS"}
+    
+    # SALUDOS - respuesta determinística (sin IA)
+    saludos = ['hola', 'buenos días', 'buenos dias', 'buenas tardes', 'buenas noches',
+               'buenas', 'hey', 'hi', 'hello', 'saludos', 'qué tal', 'que tal']
+    if any(s in last_msg for s in saludos) and len(last_msg) < 30:
+        logger.info("[ROUTER] Fast-Path: SALUDO (sin IA)")
+        return {"intent": "SALUDO"}
+    
+    # AGRADECIMIENTOS - respuesta determinística
+    gracias_keywords = ['gracias', 'thanks', 'thank you', 'te agradezco', 'muy amable']
+    if any(g in last_msg for g in gracias_keywords):
+        logger.info("[ROUTER] Fast-Path: GRACIAS (sin IA)")
+        return {"intent": "GRACIAS"}
+    
+    # CONFIRMACIONES SIMPLES - respuesta determinística
+    ok_keywords = ['ok', 'listo', 'perfecto', 'entendido', 'vale', 'genial', 'excelente']
+    if last_msg in ok_keywords or (len(last_msg) < 15 and any(k in last_msg for k in ok_keywords)):
+        logger.info("[ROUTER] Fast-Path: OK (sin IA)")
+        return {"intent": "OK"}
+    
+    # DESPEDIDAS - respuesta determinística
+    despedidas = ['chao', 'adiós', 'adios', 'bye', 'hasta luego', 'nos vemos']
+    if any(d in last_msg for d in despedidas):
+        logger.info("[ROUTER] Fast-Path: DESPEDIDA (sin IA)")
+        return {"intent": "DESPEDIDA"}
 
     # ==========================================================
-    # 🧠 FLUJO 2, 3 y FAQ: Usamos Gemini para intenciones complejas
+    # 🧠 SOLO para consultas complejas: Usamos Gemini
     # ==========================================================
     system_prompt = (
-        "Eres un clasificador de intenciones para la mesa de ayuda de Talento Tech.\n"
-        "Analiza el mensaje del usuario y responde ÚNICAMENTE con una de estas palabras clave:\n\n"
-        "STATUS -> Si pregunta por su propio estado de matrícula, inscripción, '¿cómo voy?', 'mi estado'.\n"
-        "ACCESS -> Si menciona problemas con la plataforma, clave, usuario, link de Moodle, 'no puedo entrar'.\n"
-        "GENERAL -> Si hace PREGUNTAS FRECUENTES del programa (qué es, horarios, duración, certificados, cómo inscribirse, inglés), o si saluda, agradece, se despide, pide ayuda, o habla de temas fuera de contexto.\n\n"
-        f"Mensaje del usuario: \"{last_msg}\"\n\n"
-        "Responde con UNA sola palabra: STATUS, ACCESS, o GENERAL."
+        "Clasifica la intención. Responde SOLO: STATUS, ACCESS o GENERAL.\n"
+        "STATUS=estado matrícula. ACCESS=plataforma/clave. GENERAL=otro.\n"
+        f"Mensaje: \"{last_msg}\"\nIntención:"
     )
     
     try:
-        response = llm.invoke(system_prompt)
+        response = invoke_with_logging(llm, system_prompt, context="ROUTER")
         raw_intent = response.content.strip().upper()
         logger.info(f"[ROUTER] Gemini respuesta raw: '{raw_intent}'")
         
@@ -113,6 +143,11 @@ def decide_next_node(state: AgentState):
     if intent == 'STATUS': return "check_status"
     if intent == 'ACCESS': return "platform_access"
     
+    # Respuestas determinísticas (sin IA) - COSTO 0 TOKENS
+    if intent in ('SALUDO', 'GRACIAS', 'OK', 'DESPEDIDA'):
+        return "quick_response"
+    
+    # Solo FAQs complejas usan IA
     return "general_response"
 
 # Construcción del Grafo
@@ -124,7 +159,8 @@ def build_agent_graph():
     workflow.add_node("confirm_response", confirm_response_node)
     workflow.add_node("check_status", check_status_node)
     workflow.add_node("platform_access", platform_access_node)
-    workflow.add_node("general_response", llm_fallback_node)
+    workflow.add_node("quick_response", quick_response_node)  # Sin IA
+    workflow.add_node("general_response", llm_fallback_node)   # Con IA
     
     workflow.set_entry_point("load_context")
     workflow.add_edge("load_context", "router_gemini")
@@ -136,6 +172,7 @@ def build_agent_graph():
             "confirm_response": "confirm_response",
             "check_status": "check_status",
             "platform_access": "platform_access",
+            "quick_response": "quick_response",
             "general_response": "general_response"
         }
     )
@@ -143,6 +180,7 @@ def build_agent_graph():
     workflow.add_edge("confirm_response", END)
     workflow.add_edge("check_status", END)
     workflow.add_edge("platform_access", END)
+    workflow.add_edge("quick_response", END)
     workflow.add_edge("general_response", END)
     
     return workflow.compile()

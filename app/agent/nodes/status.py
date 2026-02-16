@@ -2,6 +2,7 @@ import logging
 from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.agent.state import AgentState
+from app.utils.gemini_logger import invoke_with_logging, log_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +17,6 @@ def check_status_node(state: AgentState):
     """Revisa el estado de la matrícula usando IA para redactar el mensaje."""
     data = state.get('student_data')
     name = state.get('student_name', 'Estudiante')
-    messages = state.get('messages', [])
-    
-    # Saber qué preguntó exactamente el usuario para darle contexto a la IA
-    last_msg = messages[-1].content if messages else "estado de matrícula"
     
     # 1. Validación rápida si no hay datos
     if not data:
@@ -37,34 +34,27 @@ def check_status_node(state: AgentState):
     modalidad = data.get('modalidad', 'No especificada')
     inicio = data.get('inicio_formacion', 'Pronto')
 
-    # 3. EL CEREBRO EN ACCIÓN: Prompt dinámico
-    prompt = f"""
-    Eres el asistente virtual amable y profesional de Talento Tech.
-    El estudiante {name} te acaba de escribir: "{last_msg}".
-    Tu trabajo es informarle su estado de matrícula basándote ÚNICAMENTE en estos datos de la base de datos:
+    # 3. Prompt optimizado (reducido para menos tokens)
+    prompt = f"""Informa estado de matrícula a {name}. Respuesta concisa, formato WhatsApp.
 
-    DATOS DEL ESTUDIANTE:
-    - Bootcamp: {bootcamp}
-    - Modalidad: {modalidad}
-    - Fecha de inicio: {inicio}
-    - Respuesta de confirmación dada: {respuesta}
-    - Estado en el sistema: {estado_envio}
+Datos BD:
+- Bootcamp: {bootcamp}
+- Modalidad: {modalidad}
+- Inicio: {inicio}
+- Confirmación: {respuesta}
+- Estado: {estado_envio}
 
-    REGLAS ESTRICTAS PARA TU RESPUESTA:
-    1. Si la "Respuesta de confirmación" es "Sí" o "Si": Dile con mucho entusiasmo que su cupo está CONFIRMADO, que ya está inscrito oficialmente y recuérdale la fecha de inicio y modalidad.
-    2. Si la "Respuesta de confirmación" es "No": Dile de forma muy amable que entendemos, que su estado es CANCELADO o NO INSCRITO para esta cohorte, y despídete cordialmente deseando verle en el futuro.
-    3. Si el "Estado en el sistema" es "matriculado" o "graduado": Felicítalo acorde a su estado.
-    4. NUNCA le pidas que confirme respondiendo SÍ o NO (porque si está aquí, es porque ya pasó esa etapa o su estado es diferente).
-    5. Usa formato de WhatsApp (negritas con asteriscos *, listas, emojis) para que se vea muy ordenado y bonito.
-    6. Sé conciso y directo al grano, no inventes datos que no estén en la lista.
-
-    Redacta la respuesta para el estudiante ahora:
-    """
+Reglas:
+- Si confirmó "Sí": cupo CONFIRMADO, felicita, indica inicio.
+- Si "No": estado CANCELADO, despide cordialmente.
+- Si matriculado/graduado: felicita.
+- NO pidas confirmar SÍ/NO.
+- Max 4 líneas. Usa emojis con moderación."""
 
     try:
         logger.info(f"[STATUS NODO] IA redactando estado para {name} (Respuesta BD: {respuesta})")
         # Invocamos a Gemini para que haga la magia
-        response = llm_redactor.invoke(prompt)
+        response = invoke_with_logging(llm_redactor, prompt, context="STATUS_NODO")
         msg = response.content.strip()
         
     except Exception as e:
