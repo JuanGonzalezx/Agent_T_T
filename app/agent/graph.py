@@ -107,9 +107,60 @@ def router(state: AgentState):
     if any(d in last_msg for d in despedidas):
         logger.info("[ROUTER] Fast-Path: DESPEDIDA (sin IA)")
         return {"intent": "DESPEDIDA"}
+    
+    # ==========================================================
+    # 📚 FAQs COMUNES - respuestas pre-definidas (sin IA)
+    # ==========================================================
+    # Qué es Talento Tech
+    info_talento = ['qué es talento', 'que es talento', 'talento tech', 'talentotech', 
+                    'de qué trata', 'de que trata', 'qué programa', 'que programa']
+    if any(kw in last_msg for kw in info_talento):
+        logger.info("[ROUTER] Fast-Path: INFO_TALENTO (sin IA)")
+        return {"intent": "INFO_TALENTO"}
+    
+    # Inscripción/registro
+    info_inscripcion = ['cómo me inscribo', 'como me inscribo', 'inscribirme', 'registrarme',
+                        'quiero inscribirme', 'donde me inscribo', 'dónde me inscribo',
+                        'proceso de inscripción', 'proceso de inscripcion', 'requisitos']
+    if any(kw in last_msg for kw in info_inscripcion):
+        logger.info("[ROUTER] Fast-Path: INFO_INSCRIPCION (sin IA)")
+        return {"intent": "INFO_INSCRIPCION"}
+    
+    # Bootcamps disponibles
+    info_bootcamps = ['bootcamp', 'cursos', 'programas', 'qué puedo estudiar', 'que puedo estudiar',
+                      'carreras', 'opciones', 'oferta', 'qué hay', 'que hay']
+    if any(kw in last_msg for kw in info_bootcamps):
+        logger.info("[ROUTER] Fast-Path: INFO_BOOTCAMPS (sin IA)")
+        return {"intent": "INFO_BOOTCAMPS"}
+    
+    # Horarios
+    info_horario = ['horario', 'horarios', 'a qué hora', 'a que hora', 'cuando son las clases',
+                    'duración', 'duracion', 'cuánto dura', 'cuanto dura']
+    if any(kw in last_msg for kw in info_horario):
+        logger.info("[ROUTER] Fast-Path: INFO_HORARIO (sin IA)")
+        return {"intent": "INFO_HORARIO"}
+    
+    # Certificación
+    info_certificado = ['certificado', 'certificación', 'certificacion', 'diploma', 'título', 'titulo',
+                        'al terminar', 'cuando termine', 'acredita']
+    if any(kw in last_msg for kw in info_certificado):
+        logger.info("[ROUTER] Fast-Path: INFO_CERTIFICADO (sin IA)")
+        return {"intent": "INFO_CERTIFICADO"}
+    
+    # Costos
+    info_costo = ['gratis', 'gratuito', 'costo', 'precio', 'cuánto cuesta', 'cuanto cuesta', 'pagar']
+    if any(kw in last_msg for kw in info_costo):
+        logger.info("[ROUTER] Fast-Path: INFO_COSTO (sin IA)")
+        return {"intent": "INFO_COSTO"}
+    
+    # Soporte/contacto
+    info_contacto = ['contacto', 'soporte', 'ayuda', 'número', 'numero', 'correo', 'email', 'teléfono']
+    if any(kw in last_msg for kw in info_contacto):
+        logger.info("[ROUTER] Fast-Path: INFO_CONTACTO (sin IA)")
+        return {"intent": "INFO_CONTACTO"}
 
     # ==========================================================
-    # 🧠 SOLO para consultas complejas: Usamos Gemini
+    # 🧠 SOLO para consultas MUY ESPECÍFICAS: Usamos Gemini
     # ==========================================================
     system_prompt = (
         "Clasifica la intención. Responde SOLO: STATUS, ACCESS o GENERAL.\n"
@@ -144,10 +195,13 @@ def decide_next_node(state: AgentState):
     if intent == 'ACCESS': return "platform_access"
     
     # Respuestas determinísticas (sin IA) - COSTO 0 TOKENS
-    if intent in ('SALUDO', 'GRACIAS', 'OK', 'DESPEDIDA'):
+    quick_intents = ('SALUDO', 'GRACIAS', 'OK', 'DESPEDIDA', 
+                     'INFO_TALENTO', 'INFO_INSCRIPCION', 'INFO_BOOTCAMPS',
+                     'INFO_HORARIO', 'INFO_CERTIFICADO', 'INFO_COSTO', 'INFO_CONTACTO')
+    if intent in quick_intents:
         return "quick_response"
     
-    # Solo FAQs complejas usan IA
+    # Solo consultas MUY específicas usan IA (última opción)
     return "general_response"
 
 # Construcción del Grafo

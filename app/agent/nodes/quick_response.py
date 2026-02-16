@@ -48,6 +48,72 @@ def quick_response_node(state: AgentState):
         "DESPEDIDA": (
             f"¡Hasta pronto{saludo_nombre}! 👋\n"
             "Fue un gusto ayudarte. ¡Éxitos en tu formación!"
+        ),
+        
+        # =====================================================
+        # FAQs PRE-DEFINIDAS (0 tokens de Gemini)
+        # =====================================================
+        "INFO_TALENTO": (
+            "*Talento Tech* es un programa de formación gratuita del MinTIC 🇨🇴\n\n"
+            "✅ Bootcamps en tecnología (IA, Datos, Desarrollo)\n"
+            "✅ Operado por U. de Caldas y U. de Antioquia\n"
+            "✅ 100% virtual y gratuito\n"
+            "✅ Certificación oficial del MinTIC\n\n"
+            "¿Te gustaría saber cómo inscribirte? Escribe *inscripción*"
+        ),
+        
+        "INFO_INSCRIPCION": (
+            "📝 *Proceso de inscripción:*\n\n"
+            "1️⃣ Ingresa a *siga.talentotech2.com.co*\n"
+            "2️⃣ Registra tus datos personales\n"
+            "3️⃣ Sube tu cédula en PDF (ambas caras)\n"
+            "4️⃣ Selecciona el bootcamp de tu interés\n"
+            "5️⃣ Espera confirmación por correo/WhatsApp\n\n"
+            "💡 Si ya estás inscrito, escribe *estado* para verificar."
+        ),
+        
+        "INFO_BOOTCAMPS": (
+            "🎓 *Bootcamps disponibles:*\n\n"
+            "🤖 Inteligencia Artificial\n"
+            "📊 Análisis de Datos\n"
+            "💻 Desarrollo de Software\n"
+            "☁️ Cloud Computing\n"
+            "🔒 Ciberseguridad\n\n"
+            "Todos son *gratuitos* y con certificación MinTIC.\n"
+            "Escribe *inscripción* para saber cómo aplicar."
+        ),
+        
+        "INFO_HORARIO": (
+            "⏰ *Horarios de clases:*\n\n"
+            "📅 Lunes a Viernes\n"
+            "🕕 6:00 PM a 10:00 PM\n"
+            "⏱️ Duración: ~2 meses\n\n"
+            "💡 El curso de inglés previo dura 1-4 días antes del bootcamp principal."
+        ),
+        
+        "INFO_CERTIFICADO": (
+            "🏆 *Certificación:*\n\n"
+            "✅ Certificado oficial del *MinTIC*\n"
+            "✅ Avalado como formación para el trabajo\n"
+            "✅ Requisito: 75% de asistencia mínima\n\n"
+            "El certificado se envía por correo al completar el bootcamp."
+        ),
+        
+        "INFO_COSTO": (
+            "💚 *¡Es 100% GRATIS!*\n\n"
+            "Talento Tech es financiado por el MinTIC.\n"
+            "No debes pagar absolutamente nada:\n"
+            "• Sin matrícula\n"
+            "• Sin mensualidades\n"
+            "• Sin costo de certificado\n\n"
+            "Escribe *inscripción* para saber cómo aplicar."
+        ),
+        
+        "INFO_CONTACTO": (
+            "📞 *Canales de soporte:*\n\n"
+            "📧 soporte@talentotech.gov.co\n"
+            "🌐 talentotech2.com.co\n\n"
+            "También puedo ayudarte aquí. ¿Qué necesitas?"
         )
     }
     
