@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # Instanciamos el modelo para el Agente FAQ
 llm_faq = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite", 
+    model="gemini-2.0-flash-lite", 
     temperature=0.3, # Un poco de creatividad para que converse naturalmente
     max_retries=2
 )

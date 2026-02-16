@@ -47,16 +47,19 @@ def log_token_usage(response: Any, context: str = "GEMINI") -> dict:
             usage_data["output_tokens"] = getattr(usage, 'output_tokens', 0) or usage.get('output_tokens', 0)
             usage_data["total_tokens"] = getattr(usage, 'total_tokens', 0) or usage.get('total_tokens', 0)
         
-        # Log con formato estructurado
-        logger.info(
+        # Log con formato estructurado (doble output para garantizar visibilidad en Render)
+        msg = (
             f"[{context}] 📊 Tokens usados - "
             f"Input: {usage_data['input_tokens']} | "
             f"Output: {usage_data['output_tokens']} | "
             f"Total: {usage_data['total_tokens']}"
         )
+        logger.info(msg)
+        print(msg, flush=True)  # Backup directo a stdout para Render
         
     except Exception as e:
         logger.warning(f"[{context}] No se pudo extraer info de tokens: {e}")
+        print(f"[{context}] ⚠️ No se pudo extraer info de tokens: {e}", flush=True)
     
     return usage_data
 
@@ -77,7 +80,7 @@ def invoke_with_logging(
     Returns:
         El objeto response de la invocación
     """
-    logger.info(f"[{context}] 🚀 Invocando Gemini...")
+    print(f"[{context}] 🚀 Invocando Gemini...", flush=True)
     
     response = llm.invoke(prompt)
     log_token_usage(response, context)

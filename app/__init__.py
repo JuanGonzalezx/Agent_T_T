@@ -1,9 +1,29 @@
 import os
+import sys
+import logging
 from dotenv import load_dotenv
 import atexit
 from flask import Flask, jsonify
 from flask_cors import CORS
 load_dotenv()
+
+# =============================================================================
+# CONFIGURACIÓN DE LOGGING PARA RENDER/GUNICORN
+# =============================================================================
+# Configurar logging ANTES de importar cualquier módulo
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # Forzar salida a stdout para Render
+    ]
+)
+# Reducir ruido de librerías externas
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('langchain').setLevel(logging.WARNING)
 # Importar Servicios (Asegúrate de haber movido los archivos a app/services/)
 from app.services.whatsapp_service import WhatsAppService
 from app.services.google_drive_service import GoogleDriveService

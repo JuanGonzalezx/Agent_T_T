@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # Instanciamos el modelo aquí para que el nodo tenga su propio "cerebro" redactor
 llm_redactor = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite", # Usamos el que te está funcionando rápido
+    model="gemini-2.0-flash-lite", # Usamos el que te está funcionando rápido
     temperature=0.4, # Un poco de creatividad para que no suene robótico
     max_retries=2
 )
