@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # 1. Configuración del Modelo Gemini (Router)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash-lite", # O el que estés usando y no te dé error
+    model="gemini-2.5-flash-lite", # O el que estés usando y no te dé error
     temperature=0.0,  # 0.0 para el Router porque queremos precisión matemática, no creatividad
     max_tokens=10,    # Solo necesitamos 1 palabra de respuesta
     timeout=30,
