@@ -1,0 +1,850 @@
+================================================================================
+                    AGENT_T_T Backend- SCOPE COMPLETO DEL PROYECTO
+                    Agente Virtual WhatsApp - Talento Tech
+                    Fecha: 18 de Febrero de 2026
+================================================================================
+
+================================================================================
+1. DESCRIPCIÓN GENERAL
+================================================================================
+
+Agent_T_T es un backend Flask que funciona como agente virtual de WhatsApp
+para el programa Talento Tech del MinTIC (Colombia). Permite:
+
+- Recibir mensajes de WhatsApp y responder automáticamente con IA (Gemini)
+- Envío masivo de mensajes de plantilla a estudiantes
+- Confirmación de matrícula (Sí/No) con registro en base de datos
+- Consultas de estado de inscripción
+- FAQs automáticas sobre el programa
+- Sincronización bidireccional con Google Drive
+- Panel de gestión vía API REST
+
+Stack: Python 3.10+ | Flask 3.0 | LangGraph | Gemini 2.5 | Turso (libSQL)
+Deploy: Render (backend) | Vercel (frontend)
+URL producción: https://agent-t-t.onrender.com
+
+
+================================================================================
+2. ESTRUCTURA DE ARCHIVOS Y PROPÓSITO DE CADA UNO
+================================================================================
+
+Agent_T_T/
+│
+├── run.py                          # Punto de entrada para desarrollo local
+│                                   # Carga .env, crea app Flask, inicia servidor
+│                                   # en puerto 5000 con debug condicional.
+│
+├── requirements.txt                # 15 dependencias del proyecto:
+│                                   # Flask, flask-cors, gunicorn, langgraph,
+│                                   # langchain-google-genai, langchain-core,
+│                                   # libsql-experimental, requests, pandas,
+│                                   # openpyxl, APScheduler, python-dotenv, etc.
+│
+├── langgraph.json                  # Config LangGraph: apunta al grafo en
+│                                   # app/agent/graph.py:get_agent
+│
+├── pytest.ini                      # Configuración de pytest
+│
+├── .env                            # Variables de entorno (NO en git):
+│                                   # ACCESS_TOKEN, PHONE_NUMBER_ID, VERSION,
+│                                   # VERIFY_TOKEN, TURSO_DATABASE_URL,
+│                                   # TURSO_AUTH_TOKEN, USE_AI_AGENT
+│
+├── .env.example                    # Plantilla de variables de entorno
+│
+├── data/                           # Carpeta para BD SQLite local y cache dedup
+│
+├── templates/
+│   └── privacy.html                # Política de privacidad (requerida por Meta)
+│
+├── docs/                           # Documentación técnica
+│   ├── API_DOCUMENTATION.md        # Referencia completa de endpoints REST
+│   ├── BACKEND_DOCUMENTATION.md    # Arquitectura técnica del backend
+│   ├── DATABASE_SCHEMA.md          # DDL, campos, índices, queries comunes
+│   └── SERVICES_ARCHITECTURE.md    # Diagramas de servicios y métodos
+│
+├── FRONTEND_SPECS.md               # Especificaciones UI para panel de gestión
+├── PROJECT_DOCUMENTATION_v1.md     # Documentación general v1
+├── MIGRACION_TURSO.md              # Guía de migración SQLite → Turso
+├── SQLITE_API_DOCS.md              # Docs API para SQLite
+│
+├── tests/                          # Suite de tests (~80+ tests)
+│   ├── test_agent_optimizations.py # Tests del agente: dedup, router, quick_response
+│   ├── test_controllers.py         # Tests de endpoints HTTP
+│   ├── test_data_normalizer.py     # Tests de normalización de datos
+│   ├── test_db_handler.py          # Tests de CRUD en base de datos
+│   └── test_logic.py              # Tests de lógica de respuestas (legacy)
+│
+├── app/                            # PAQUETE PRINCIPAL
+│   ├── __init__.py                 # Factory de la app Flask (create_app)
+│   │                               # Instancias singleton de servicios
+│   │                               # Registro de Blueprints
+│   │                               # Configuración de logging
+│   │                               # Instancia WSGI para Gunicorn
+│   │
+│   ├── core/
+│   │   └── logic.py                # ResponseLogic: procesamiento legacy (regex)
+│   │                               # Modo sin IA para webhook (Sí/No con regex)
+│   │
+│   ├── controllers/                # CAPA HTTP - Blueprints Flask
+│   │   ├── system_controller.py    # GET /, /health, /privacy, DELETE /api/database/reset
+│   │   ├── webhook_controller.py   # GET/POST /webhook (WhatsApp Cloud API)
+│   │   ├── message_controller.py   # POST /api/messages/send-simple, send-batch
+│   │   ├── student_controller.py   # CRUD /api/estudiantes/*, /api/contacts/*
+│   │   ├── bootcamp_controller.py  # CRUD /api/bootcamps/*
+│   │   └── drive_controller.py     # POST /api/google/upload, /api/sync/*
+│   │
+│   ├── services/                   # CAPA DE NEGOCIO
+│   │   ├── whatsapp_service.py     # Comunicación con Meta Graph API
+│   │   ├── db_handler.py           # CRUD Turso/SQLite (1130 líneas)
+│   │   ├── google_drive_service.py # Descarga/actualización de archivos Drive
+│   │   └── sync_service.py         # Scheduler cada 5 min para sync con Drive
+│   │
+│   ├── agent/                      # AGENTE IA CON LANGGRAPH
+│   │   ├── __init__.py             # Exports: get_agent, build_agent_graph
+│   │   ├── state.py                # AgentState (TypedDict): messages, phone,
+│   │   │                           # student_name, student_data, intent
+│   │   ├── graph.py                # Grafo LangGraph: router + nodos + edges
+│   │   │                           # Router con Fast-Path (keywords) + Gemini fallback
+│   │   └── nodes/                  # Nodos especializados del grafo
+│   │       ├── __init__.py         # Re-exports de todos los nodos
+│   │       ├── load_context.py     # Carga datos del estudiante desde BD
+│   │       ├── status.py           # Respuesta determinística de estado matrícula
+│   │       ├── platform.py         # Info de acceso a plataforma educativa
+│   │       ├── confirm.py          # Procesamiento de confirmación Sí/No
+│   │       ├── quick_response.py   # Respuestas pre-definidas (0 tokens IA)
+│   │       └── fallback.py         # Gemini FAQ para consultas no cubiertas
+│   │
+│   └── utils/                      # UTILIDADES
+│       ├── data_normalizer.py      # Normalización de teléfonos y DataFrames
+│       ├── gemini_logger.py        # Log de tokens usados en cada llamada Gemini
+│       └── message_dedup.py        # Cache híbrido (memoria+archivo) dedup
+
+
+================================================================================
+3. ARQUITECTURA ACTUAL
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           USUARIO (WhatsApp)                                │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │ Webhook POST
+                               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    BACKEND FLASK (Render/Gunicorn)                           │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    webhook_controller.py                            │    │
+│  │  1. Parsear JSON del webhook                                       │    │
+│  │  2. Filtrar statuses (sent/delivered/read)                         │    │
+│  │  3. Extraer message_id, from_number, text                         │    │
+│  │  4. Deduplicar (MessageDeduplicator)                              │    │
+│  │  5. Responder 200 inmediato a Meta                                │    │
+│  │  6. Procesar en background thread                                 │    │
+│  └────────────────────────────┬────────────────────────────────────────┘    │
+│                               │                                             │
+│               ┌───────────────┴───────────────┐                             │
+│               │  USE_AI_AGENT = True?          │                            │
+│               ├──── Sí ───────┤──── No ────────┤                            │
+│               ▼               ▼                                             │
+│  ┌────────────────┐  ┌─────────────────┐                                   │
+│  │  AGENTE IA     │  │  ResponseLogic  │                                   │
+│  │  (LangGraph)   │  │  (Regex legacy) │                                   │
+│  └───────┬────────┘  └─────────────────┘                                   │
+│          │                                                                  │
+│          ▼                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    GRAFO LANGGRAPH                                  │    │
+│  │                                                                     │    │
+│  │  load_context ──► router_gemini ──►┬── confirm_response ──► END    │    │
+│  │       │                            ├── check_status ──────► END    │    │
+│  │  (Busca datos    (Clasifica        ├── platform_access ───► END    │    │
+│  │   en Turso)       intención)       ├── quick_response ────► END    │    │
+│  │                                    └── general_response ──► END    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                      SERVICIOS                                       │   │
+│  │  WhatsAppService ◄──► Meta Graph API (v22.0)                        │   │
+│  │  DatabaseHandler ◄──► Turso (prod) / SQLite (dev)                   │   │
+│  │  GoogleDriveService ◄──► Google Drive API                           │   │
+│  │  SyncService ◄──► APScheduler (cada 5 min)                          │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+4. FLUJOS DE TRABAJO DETALLADOS
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 1: MENSAJE ENTRANTE DE WHATSAPP (MODO IA)
+────────────────────────────────────────────────────────────────────────────────
+
+1. Meta envía POST a /webhook con JSON del mensaje
+2. webhook_controller.py:
+   a. Parsea JSON
+   b. Ignora si es status (sent/delivered/read)
+   c. Extrae: message_id, from_number, text, type
+   d. Verifica deduplicación (MessageDeduplicator)
+   e. Si duplicado → responde 200 y termina
+   f. Si nuevo → responde 200 inmediato + lanza thread background
+
+3. process_message_background():
+   a. Crea HumanMessage con el texto
+   b. Invoca agent.invoke({messages, phone})
+
+4. Grafo LangGraph ejecuta:
+   a. load_context_node: busca estudiante por teléfono en Turso
+      → Setea student_name y student_data en state
+   
+   b. router (clasificación de intención):
+      PRIORIDAD 1 - Confirmación estricta:
+        Si estado_envio='sent' Y respuesta='default' → CONFIRM
+      
+      PRIORIDAD 2 - Fast-Path (keywords, sin IA):
+        'estado','matrícula' → STATUS
+        'acceso','plataforma','clave' → ACCESS
+        'hola','buenos días' (< 30 chars) → SALUDO
+        'gracias' → GRACIAS
+        'ok','listo','perfecto' → OK  
+        'chao','adiós' → DESPEDIDA
+        'qué es talento' → INFO_TALENTO
+        'inscribirme','registrarme' → INFO_INSCRIPCION
+        'bootcamp','cursos' → INFO_BOOTCAMPS
+        'horario','duración' → INFO_HORARIO
+        'certificado','diploma' → INFO_CERTIFICADO
+        'gratis','costo' → INFO_COSTO
+        'contacto','soporte' → INFO_CONTACTO
+      
+      PRIORIDAD 3 - Gemini (solo si nada matchea):
+        Prompt: "Clasifica: STATUS, ACCESS o GENERAL"
+        Gemini responde → se limpia a STATUS/ACCESS/GENERAL
+   
+   c. decide_next_node: enruta al nodo correspondiente
+   
+   d. Nodo ejecuta y retorna AIMessage con respuesta
+
+5. WhatsApp envía la respuesta al usuario
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 2: CONFIRMACIÓN DE MATRÍCULA (Sí/No)
+────────────────────────────────────────────────────────────────────────────────
+
+Condición: estado_envio='sent' AND respuesta IN ('default', '', NULL)
+
+1. Router detecta modo confirmación estricta → intent=CONFIRM
+2. confirm_response_node:
+   a. Extrae texto del mensaje
+   b. Detecta respuesta con patterns:
+      Sí: ['sí','si','yes','acepto','confirmo','ok','dale','claro','listo']
+      No: ['no','rechazo','cancelar','cancela','rechazar']
+   c. Si no matchea → pide "responde SÍ o NO"
+   d. Verifica que no haya respondido antes
+   e. Guarda en BD: db_handler.update_respuesta(phone, respuesta, fecha)
+   f. Responde con mensaje de confirmación o rechazo
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 3: CONSULTA DE ESTADO
+────────────────────────────────────────────────────────────────────────────────
+
+1. Router detecta keywords de estado → intent=STATUS
+2. check_status_node (DETERMINÍSTICO, sin IA):
+   a. Lee campo 'respuesta' de student_data
+   b. Tres casos:
+      - respuesta='sí'/'si'/'yes' → "Tu cupo está CONFIRMADO"
+      - respuesta='no' → "Indicaste que no participarás"  
+      - respuesta='default'/vacío → "Aún no has confirmado. Responde SÍ o NO"
+   c. Incluye: bootcamp, modalidad, fecha inicio
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 4: ACCESO A PLATAFORMA
+────────────────────────────────────────────────────────────────────────────────
+
+1. Router detecta keywords de acceso → intent=ACCESS
+2. platform_access_node:
+   a. Si no tiene datos → "primero debes estar inscrito"
+   b. Si confirmó o tiene opt_in=TRUE o matriculado:
+      → Entrega credenciales: URL + usuario(cédula) + clave(cédula)
+   c. Si no confirmó → "tu acceso aún no está habilitado"
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 5: RESPUESTAS RÁPIDAS (0 tokens)
+────────────────────────────────────────────────────────────────────────────────
+
+1. Router Fast-Path detecta intent simple
+2. quick_response_node retorna respuesta pre-definida:
+   - SALUDO: menú de opciones
+   - GRACIAS: agradecimiento
+   - OK: confirmación genérica  
+   - DESPEDIDA: despedida
+   - INFO_TALENTO: qué es el programa
+   - INFO_INSCRIPCION: pasos para inscribirse
+   - INFO_BOOTCAMPS: lista de bootcamps disponibles
+   - INFO_HORARIO: L-V 6pm-10pm, ~2 meses
+   - INFO_CERTIFICADO: certificado MinTIC, 75% asistencia
+   - INFO_COSTO: 100% gratuito
+   - INFO_CONTACTO: soporte@talentotech.gov.co
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 6: CONSULTA GENERAL (CON IA)
+────────────────────────────────────────────────────────────────────────────────
+
+1. Router no pudo clasificar → intent=GENERAL (o Gemini devuelve GENERAL)
+2. llm_fallback_node:
+   a. Construye prompt con base de conocimiento compacta de Talento Tech
+   b. Invoca Gemini (gemini-2.5-flash-lite, temp=0.3)
+   c. invoke_with_logging logea tokens usados
+   d. Retorna respuesta de Gemini en formato WhatsApp
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 7: ENVÍO MASIVO
+────────────────────────────────────────────────────────────────────────────────
+
+1. Frontend o API llama POST /api/messages/send-batch
+2. message_controller.py:
+   a. Obtiene pendientes: db_handler.get_estudiantes_pendientes_envio()
+      Condición: opt_in IN ('TRUE','1','YES','SI') AND estado_envio != 'sent'
+   b. Para cada estudiante:
+      - Construye parámetros de plantilla (nombre, modalidad, bootcamp, etc.)
+      - Envía: whatsapp_service.send_template_message()
+      - Actualiza BD: db_handler.update_estado_envio('sent' o 'error')
+      - Espera DELAY_SECONDS entre envíos (rate limiting)
+   c. Retorna resumen de resultados
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 8: CARGA DESDE GOOGLE DRIVE
+────────────────────────────────────────────────────────────────────────────────
+
+1. Frontend envía POST /api/google/upload con {fileId, accessToken}
+2. drive_controller.py:
+   a. Obtiene metadata del archivo (nombre, tipo MIME)
+   b. Descarga contenido (CSV o Sheet exportado como CSV)
+   c. Parsea con parse_file_content (sanitización agresiva)
+   d. Normaliza: teléfonos a E.164, limpia caracteres
+   e. Agrega columnas de tracking
+   f. Valida estructura
+   g. Inserta/actualiza en Turso (bootcamps + estudiantes)
+   h. Actualiza columnas nuevas en el archivo original de Drive
+   i. Configura sync automático con sync_service.set_current_file()
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 9: SINCRONIZACIÓN AUTOMÁTICA
+────────────────────────────────────────────────────────────────────────────────
+
+1. APScheduler ejecuta _sync_job cada 5 minutos
+2. Si hay pending_sync=True Y hay credenciales cacheadas:
+   a. Lee todos los estudiantes de Turso
+   b. Convierte a DataFrame
+   c. Actualiza archivo en Drive según tipo MIME
+   d. Marca pending_sync=False
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 10: MODO LEGACY (SIN IA)
+────────────────────────────────────────────────────────────────────────────────
+
+Cuando USE_AI_AGENT=False en .env:
+1. Webhook recibe mensaje
+2. ResponseLogic.process_webhook_event(body) ejecuta:
+   a. Extrae texto del mensaje
+   b. Verifica si ya respondió (get_respuesta_existente)
+   c. Regex: si/sí/yes/confirmar/acepto → guarda "Si"
+   d. Regex: no/rechazar/cancelar → guarda "No"
+   e. Otro → "responde SÍ o NO"
+   f. Envía respuesta vía whatsapp_service
+
+
+================================================================================
+5. ENDPOINTS REST COMPLETOS
+================================================================================
+
+────────────── SISTEMA ──────────────
+GET  /                              → Info general de la API
+GET  /health                        → Health check (credenciales + BD)
+GET  /privacy                       → Política de privacidad (HTML)
+DELETE /api/database/reset          → [PELIGRO] Borra TODA la BD
+
+────────────── WEBHOOK ──────────────
+GET  /webhook                       → Verificación handshake con Meta
+     Params: hub.mode, hub.verify_token, hub.challenge
+POST /webhook                       → Recepción de mensajes/eventos WhatsApp
+
+────────────── MENSAJES ──────────────
+POST /api/messages/send-simple      → Envía mensaje texto o plantilla
+     Body: {phone, message} o {phone, template_name, parameters, language_code}
+POST /api/messages/send-template    → Alias de send-simple (legacy)
+POST /api/messages/send-batch       → Envío masivo a todos los pendientes
+     Body: {template_name?, language_code?}
+
+────────────── ESTUDIANTES ──────────────
+GET  /api/estudiantes/all           → Lista paginada
+     Params: limit (default 100), offset (default 0)
+GET  /api/estudiantes/bootcamp/<id> → Filtrar por bootcamp
+GET  /api/estudiantes/phone/<phone> → Buscar por teléfono
+PUT  /api/estudiantes/update-field  → Actualizar campo específico
+     Body: {telefono, field, value}
+DELETE /api/estudiantes/delete/<phone> → Eliminar estudiante
+
+────────────── ESTADÍSTICAS ──────────────
+GET  /api/estadisticas              → Stats generales (alias)
+GET  /api/contacts/stats            → Stats generales
+     Response: {total_estudiantes, mensajes_enviados, mensajes_error,
+                confirmaron_si, confirmaron_no, pendientes_respuesta,
+                total_bootcamps, tasa_respuesta}
+GET  /api/contacts/pending          → Lista de pendientes de envío
+
+────────────── BOOTCAMPS ──────────────
+GET  /api/bootcamps                 → Lista todos los bootcamps
+DELETE /api/bootcamps/delete/<id>   → Eliminar un bootcamp
+DELETE /api/bootcamps/clear-all     → [PELIGRO] Eliminar todos los bootcamps
+
+────────────── GOOGLE DRIVE ──────────────
+POST /api/google/upload             → Procesar archivo de Drive
+     Body: {fileId, accessToken}
+POST /api/sync/drive-manual         → Forzar sincronización manual
+
+
+================================================================================
+6. BASE DE DATOS - ESQUEMA COMPLETO
+================================================================================
+
+──── Tabla: bootcamps ────
+bootcamp_id TEXT UNIQUE NOT NULL    → Código único ("IA_2024_01")
+bootcamp_nombre TEXT NOT NULL       → Nombre ("Inteligencia Artificial")
+fecha_creacion TIMESTAMP            → Auto
+
+──── Tabla: estudiantes ────
+id INTEGER PRIMARY KEY AUTOINCREMENT
+telefono_e164 TEXT UNIQUE NOT NULL  → "+573001234567" (clave de búsqueda)
+nombre TEXT NOT NULL                → "Juan Pérez"
+bootcamp_id TEXT                    → FK a bootcamps (no enforced en SQLite)
+bootcamp_nombre TEXT                → Cache desnormalizado
+modalidad TEXT                      → "Presencial" / "Virtual" / "Híbrido"
+ingles_inicio TEXT                  → Fecha inicio inglés
+ingles_fin TEXT                     → Fecha fin inglés
+inicio_formacion TEXT               → Fecha inicio formación técnica
+horario TEXT                        → "L-V 6pm-10pm"
+lugar TEXT                          → Sede/ubicación
+opt_in TEXT                         → "TRUE"/"FALSE" (consentimiento)
+estado_envio TEXT                   → ""(pendiente) / "sent" / "error"
+fecha_envio TIMESTAMP               → ISO timestamp del envío
+message_id TEXT                     → wamid.xxx (ID mensaje WhatsApp)
+respuesta TEXT                      → "default" / "Sí" / "No"
+fecha_respuesta TIMESTAMP           → ISO timestamp de la respuesta
+fecha_creacion TIMESTAMP            → Auto
+fecha_actualizacion TIMESTAMP       → Auto
+
+──── Índices ────
+idx_estudiantes_telefono    ON estudiantes(telefono_e164)
+idx_estudiantes_bootcamp    ON estudiantes(bootcamp_id)
+idx_estudiantes_fecha_envio ON estudiantes(fecha_envio)
+idx_estudiantes_respuesta   ON estudiantes(respuesta)
+
+──── Lógica de Turso ────
+- Producción: HTTP API a Turso (libSQL cloud)
+  URL: libsql://whatsapp-tracking-*.turso.io
+  Auth: Bearer JWT token
+  Formato respuesta: {"type":"text","value":"actual_value"}
+- Desarrollo: SQLite local (data/whatsapp_tracking.db)
+  WAL mode, busy_timeout=30s, autocommit
+
+
+================================================================================
+7. FUNCIONES RELEVANTES POR ARCHIVO
+================================================================================
+
+──── app/__init__.py ────
+create_app()                        → Factory Flask: inicia servicios, blueprints
+  Instancias globales: whatsapp_service, db_handler, sync_service, logic_brain
+
+──── app/agent/graph.py ────
+router(state) → {"intent": str}     → Clasifica intención del mensaje
+  - Prioridad 1: confirmación estricta (estado_envio=sent + respuesta=default)
+  - Prioridad 2: fast-path por keywords (~18 categorías)
+  - Prioridad 3: Gemini (prompt clasificador → STATUS/ACCESS/GENERAL)
+decide_next_node(state) → str       → Mapea intent a nombre de nodo
+build_agent_graph() → CompiledGraph → Construye el grafo LangGraph
+get_agent() → CompiledGraph         → Singleton del agente compilado
+
+──── app/agent/state.py ────
+AgentState(TypedDict)               → Estado del grafo:
+  messages: List[dict]              → Historial (add_messages reducer)
+  phone: str                        → Teléfono del usuario
+  student_name: Optional[str]       → Nombre del estudiante
+  student_data: Optional[dict]      → Datos completos del estudiante
+  intent: Optional[str]             → Intención clasificada
+
+──── app/agent/nodes/load_context.py ────
+load_context_node(state)            → Busca estudiante en BD por teléfono
+  Input: state['phone']
+  Output: {student_name, student_data}
+
+──── app/agent/nodes/status.py ────
+check_status_node(state)            → Respuesta determinística de estado
+  Lee: student_data['respuesta']
+  Si 'sí/si/yes' → cupo confirmado
+  Si 'no' → cupo cancelado
+  Si 'default'/vacío → pendiente de confirmar
+  NO USA IA
+
+──── app/agent/nodes/platform.py ────
+platform_access_node(state)         → Info de acceso a plataforma
+  Si confirmó/opt_in/matriculado → credenciales
+  Si no → "acceso no habilitado"
+  NO USA IA
+
+──── app/agent/nodes/confirm.py ────
+confirm_response_node(state)        → Procesa Sí/No y guarda en BD
+  Patterns Sí: sí, si, yes, acepto, confirmo, ok, dale, claro, listo
+  Patterns No: no, rechazo, cancelar, cancela, rechazar
+  Guarda: db_handler.update_respuesta(phone, respuesta, fecha)
+  Verifica doble respuesta
+  NO USA IA
+
+──── app/agent/nodes/quick_response.py ────
+quick_response_node(state)          → Respuestas pre-definidas (0 tokens)
+  Mapa de 11 intents → strings estáticos
+  NO USA IA
+
+──── app/agent/nodes/fallback.py ────
+llm_fallback_node(state)            → FAQ con Gemini
+  Modelo: gemini-2.5-flash-lite (temp=0.3)
+  Prompt: base de conocimiento compacta + pregunta
+  Usa: invoke_with_logging() para tracking de tokens
+  USA IA (última opción)
+
+──── app/controllers/webhook_controller.py ────
+extract_message_data(body)          → Parsea webhook JSON de Meta
+  Filtra statuses, extrae text/button/interactive
+webhook()                           → Endpoint GET (verificación) + POST (mensajes)
+  GET: handshake con Meta (verify_token)
+  POST: dedup → background thread → agente
+process_message_background()        → Thread: agent.invoke() + enviar respuesta
+
+──── app/controllers/message_controller.py ────
+send_simple_message()               → Envía texto o plantilla individual
+send_batch_messages()               → Envío masivo a pendientes
+  Loop: pendientes → template → update estado → delay
+
+──── app/controllers/student_controller.py ────
+get_all_estudiantes()               → GET paginado (limit, offset)
+get_by_bootcamp(bootcamp_id)        → GET filtrado por bootcamp
+get_by_phone(phone)                 → GET por teléfono  
+update_field()                      → PUT campo específico
+delete_student(phone)               → DELETE por teléfono
+get_stats()                         → GET estadísticas generales
+get_pending()                       → GET pendientes de envío
+
+──── app/controllers/bootcamp_controller.py ────
+get_all()                           → GET todos los bootcamps
+delete_bootcamp(bootcamp_id)        → DELETE uno
+clear_all()                         → DELETE todos
+
+──── app/controllers/drive_controller.py ────
+upload_from_google()                → Procesa archivo Drive → BD
+  Pipeline: metadata → download → parse → normalize → validate → insert → sync
+sync_drive_manual()                 → Fuerza sync manual
+
+──── app/controllers/system_controller.py ────
+index()                             → Info API
+health_check()                      → Health check
+privacy_policy()                    → HTML privacidad
+reset_database()                    → [PELIGRO] Borra todo
+
+──── app/services/db_handler.py (1130 líneas) ────
+__init__(db_path)                   → Auto-detecta Turso o SQLite
+_execute_turso_query(query, params) → HTTP a Turso API
+_execute_query(query, params, ...)  → Unificado Turso/SQLite
+_get_connection()                   → SQLite con WAL mode
+_execute_with_retry(func)           → Retry con backoff exponencial
+_init_database()                    → CREATE TABLE IF NOT EXISTS
+insert_or_update_bootcamp()         → UPSERT bootcamp
+get_all_bootcamps()                 → SELECT todos
+insert_or_update_estudiante()       → UPSERT estudiante (preserva tracking)
+get_estudiantes_by_bootcamp()       → SELECT por bootcamp_id
+get_estudiantes_pendientes_envio()  → SELECT donde opt_in=TRUE y no sent
+update_estado_envio()               → UPDATE estado + fecha + message_id
+get_estudiante_by_phone()           → SELECT con normalización de teléfono
+get_estudiantes_by_date_range()     → SELECT por rango de fechas
+get_all_estudiantes(limit, offset)  → SELECT paginado con COUNT
+get_estadisticas()                  → COUNT por categorías
+get_respuesta_existente()           → CHECK si ya respondió
+update_respuesta()                  → UPDATE respuesta + fecha (con retry)
+update_estudiante_field()           → UPDATE campo individual
+update_estudiante_fields()          → UPDATE múltiples campos
+delete_estudiante()                 → DELETE por teléfono
+delete_bootcamp()                   → DELETE bootcamp
+clear_all_estudiantes()             → DELETE FROM estudiantes (con lock)
+clear_all_bootcamps()               → DELETE FROM bootcamps (con lock)
+reset_database()                    → Borra estudiantes + bootcamps
+
+──── app/services/whatsapp_service.py ────
+__init__()                          → Carga credenciales de .env
+validate_credentials()              → Verifica ACCESS_TOKEN y PHONE_NUMBER_ID
+_build_text_message_payload()       → JSON para mensaje de texto
+_build_template_message_payload()   → JSON para plantilla (header+body params)
+_normalize_phone_number()           → Limpia +, espacios, guiones
+send_text_message(phone, message)   → POST a Meta Graph API (texto)
+send_template_message()             → POST a Meta Graph API (plantilla)
+
+──── app/services/google_drive_service.py ────
+get_file_metadata(file_id, token)   → GET metadata (nombre, MIME, tamaño)
+download_file_content()             → GET/export contenido del archivo
+parse_file_content(content)         → CSV/Excel → DataFrame sanitizado
+  Sanitización: saltos de línea, comas internas, teléfonos científicos
+update_google_sheet()               → Escribe DataFrame a Google Sheet
+update_csv_file()                   → Sube CSV actualizado a Drive
+update_xlsx_file()                  → Sube XLSX actualizado a Drive
+
+──── app/services/sync_service.py ────
+__init__(db_handler, drive_service) → Inicia APScheduler (5 min)
+start()                             → Arranca el scheduler
+shutdown()                          → Detiene el scheduler
+set_current_file(file_id, token, mime) → Cachea credenciales para sync
+mark_pending()                      → Marca que hay cambios por subir
+_sync_job()                         → Lee BD → actualiza Drive
+
+──── app/core/logic.py (LEGACY) ────
+process_webhook_event(data)         → Extrae mensaje del webhook
+_handle_response(phone, text)       → Regex Sí/No → BD → respuesta
+  Usado cuando USE_AI_AGENT=False
+
+──── app/utils/gemini_logger.py ────
+log_token_usage(response, context)  → Extrae input/output/total tokens
+  Busca en: usage_metadata, response_metadata
+  Múltiples nombres de claves: input_tokens, prompt_token_count, etc.
+  Debug logging si todo es 0
+invoke_with_logging(llm, prompt, context) → llm.invoke() + log_token_usage()
+
+──── app/utils/message_dedup.py ────
+MessageDeduplicator.__init__()      → Cache en memoria + archivo JSON
+check_and_mark(message_id)          → Atómico: verifica + marca
+  1. Busca en memoria local
+  2. Busca en archivo (multi-worker)
+  3. Si nuevo → marca ambos
+is_duplicate(message_id)            → Solo verifica, no marca
+mark_processed(message_id)          → Marca sin verificar
+_cleanup_expired()                  → Limpia TTL expirados
+stats()                             → Info del cache
+get_deduplicator()                  → Singleton thread-safe
+
+──── app/utils/data_normalizer.py ────
+normalize_column_name(col)          → Minúsculas, sin acentos ni especiales
+normalize_phone_column(df)          → Busca variantes → renombra a telefono_e164
+clean_phone_numbers(df)             → Elimina +, espacios, guiones, paréntesis
+add_tracking_columns(df)            → Agrega: estado_envio, respuesta, etc.
+validate_dataframe(df)              → Verifica estructura mínima
+
+
+================================================================================
+8. MODELOS DE IA UTILIZADOS
+================================================================================
+
+Se usa Google Gemini a través de langchain-google-genai:
+
+1. ROUTER (graph.py)
+   Modelo: gemini-2.5-flash-lite
+   Temperatura: 0.0 (máxima precisión)
+   Max tokens: 10 (solo 1 palabra: STATUS/ACCESS/GENERAL)
+   Uso: SOLO cuando fast-path no matcheó (~5% de mensajes)
+
+2. FAQ/FALLBACK (fallback.py)
+   Modelo: gemini-2.5-flash-lite
+   Temperatura: 0.3 (algo de creatividad)
+   Max tokens: default
+   Uso: consultas generales no cubiertas por nodos determinísticos
+
+3. Nodos sin IA (0 tokens):
+   - check_status_node: respuesta determinística
+   - platform_access_node: respuesta determinística
+   - confirm_response_node: pattern matching
+   - quick_response_node: strings pre-definidos
+
+
+================================================================================
+9. VARIABLES DE ENTORNO
+================================================================================
+
+# WhatsApp Business API
+ACCESS_TOKEN          → Bearer token para Meta Graph API
+PHONE_NUMBER_ID       → ID del número de WhatsApp Business
+VERSION               → Versión de la API (default: v22.0)
+VERIFY_TOKEN          → Token secreto para verificación del webhook
+
+# Base de datos
+TURSO_DATABASE_URL    → libsql://nombre.turso.io (producción)
+TURSO_AUTH_TOKEN      → JWT token de Turso
+
+# Aplicación
+PORT                  → Puerto del servidor (default: 5000)
+DELAY_SECONDS         → Pausa entre envíos batch (default: 1.5)
+USE_AI_AGENT          → "True" = modo IA, "False" = modo regex legacy
+FLASK_ENV             → "development" para debug
+
+# IA
+GOOGLE_API_KEY        → API key para Google Gemini (requerida por langchain)
+
+
+================================================================================
+10. TESTS
+================================================================================
+
+──── test_agent_optimizations.py (~25 tests) ────
+TestMessageDeduplicator:
+  - test_first_message_not_duplicate
+  - test_same_message_is_duplicate
+  - test_different_messages_not_duplicate
+  - test_expired_message_not_duplicate
+  - test_empty_message_id
+  - test_none_message_id
+  - test_stats
+  - test_is_duplicate_separate_from_mark
+  - test_thread_safety (10 threads concurrentes)
+
+TestRouterFastPath:
+  - test_status_keywords (estado, matrícula, inscripción, etc.)
+  - test_access_keywords (acceso, plataforma, clave, etc.)
+  - test_saludo_keywords (hola, buenos días, etc.)
+  - test_gracias_keywords
+  - test_ok_keywords
+  - test_despedida_keywords
+  - test_info_talento
+  - test_info_inscripcion
+  - test_info_bootcamps
+  - test_info_horario
+  - test_info_certificado
+  - test_info_costo
+  - test_info_contacto
+  - test_confirm_mode (estado_envio=sent + respuesta=default)
+
+TestQuickResponseNode:
+  - test_saludo_response
+  - test_gracias_response
+  - test_ok_response
+  - test_despedida_response
+  - test_info_talento_response
+  - test_all_faq_intents_have_response
+
+TestGeminiLogger:
+  - test_log_token_usage_with_metadata
+  - test_log_token_usage_empty
+  - test_invoke_with_logging
+
+──── test_controllers.py (~15 tests) ────
+TestSystemController:
+  - test_index (GET /)
+  - test_health_check (GET /health)
+TestWebhookController:
+  - test_webhook_verify_success
+  - test_webhook_verify_fail
+  - test_webhook_post_empty
+TestStudentController:
+  - test_get_all_estudiantes
+  - test_get_stats
+  - test_get_pending
+TestBootcampController:
+  - test_get_all_bootcamps
+TestMessageController:
+  - test_send_simple_missing_phone
+  - test_send_batch
+TestErrorHandlers:
+  - test_404
+
+──── test_db_handler.py (~20 tests) ────
+  - test_init_database
+  - test_insert_bootcamp
+  - test_insert_bootcamp_duplicate
+  - test_get_all_bootcamps
+  - test_insert_estudiante
+  - test_insert_estudiante_required_fields
+  - test_get_estudiante_by_phone
+  - test_get_estudiante_by_phone_normalized
+  - test_get_estudiantes_pendientes_envio
+  - test_update_estado_envio
+  - test_update_respuesta
+  - test_get_respuesta_existente
+  - test_update_estudiante_field
+  - test_delete_estudiante
+  - test_get_estadisticas
+  - test_clear_all_estudiantes
+  - test_reset_database
+
+──── test_data_normalizer.py (~12 tests) ────
+TestNormalizeColumnName: lowercase, accents, spaces, special chars
+TestNormalizePhoneColumn: already normalized, telefono, celular, phone, no column
+TestCleanPhoneNumbers: spaces, dashes, parentheses, plus sign
+TestAddTrackingColumns: adds missing, preserves existing
+TestValidateDataframe: valid, missing phone, empty
+TestIntegration: full pipeline
+
+──── test_logic.py (~10 tests) ────
+  - test_handle_si_response
+  - test_handle_no_response
+  - test_handle_yes_variants (si, sí, yes, confirmar, acepto)
+  - test_handle_no_variants (no, rechazar, cancelar)
+  - test_handle_invalid_response
+  - test_ignore_duplicate_response
+
+Ejecución: pytest tests/ -v
+
+
+================================================================================
+11. CONFIGURACIÓN DE DEPLOY (RENDER)
+================================================================================
+
+- Web Service en Render
+- Start Command: gunicorn app:app
+- Build Command: pip install -r requirements.txt
+- Variables de entorno configuradas en Render Dashboard
+- Base de datos: Turso cloud (no necesita disco persistente)
+- URL: https://agent-t-t.onrender.com
+- Webhook Meta: https://agent-t-t.onrender.com/webhook
+- Logging: stdout → capturado por Render
+
+
+================================================================================
+12. DEPENDENCIAS CRÍTICAS Y VERSIONES
+================================================================================
+
+Flask>=3.0.0                → Framework web
+flask-cors>=4.0.0           → Cross-Origin (frontend Vercel)
+gunicorn>=21.0.0            → Servidor WSGI producción
+Werkzeug>=3.0.0             → Utilidades HTTP
+libsql-experimental>=0.0.47 → Driver Turso/libSQL
+requests>=2.31.0            → HTTP client (Meta API, Drive API, Turso)
+python-dotenv>=1.0.0        → Variables de entorno
+pandas>=2.0.0               → Procesamiento DataFrames
+openpyxl>=3.1.0             → Lectura/escritura Excel
+APScheduler>=3.10.0         → Scheduler para sync automático
+langgraph>=0.2.0            → Framework de agente IA
+langgraph-cli>=0.1.0        → CLI de LangGraph
+langchain-google-genai>=2.0.0 → Integración Gemini
+langchain-core>=0.3.0       → Core LangChain (messages, etc.)
+
+
+================================================================================
+13. NOTAS PARA DEPURACIÓN Y MEJORAS
+================================================================================
+
+PUNTOS DE ATENCIÓN:
+- El router tiene ~18 categorías de fast-path pero los keywords son fijos
+  (no aprende de nuevas variantes)
+- El campo 'respuesta' en BD puede ser: 'Sí', 'No', 'default', '', NULL
+  (inconsistencia entre mayúsculas/minúsculas según de dónde se setee)
+- La lógica legacy (ResponseLogic) sigue activa como fallback cuando
+  USE_AI_AGENT=False
+- Los logs de tokens pueden mostrar 0/0/0 si la versión de langchain
+  cambia el formato de response_metadata
+- sync_service cachea el token de Google Drive en memoria (se pierde
+  al reiniciar el dyno de Render)
+- El template de WhatsApp ('prueba_matricula') tiene 8 parámetros fijos
+  en el body que deben coincidir con la plantilla aprobada en Meta
+- No hay autenticación en los endpoints REST (excepto webhook)
+- db_handler usa REPLACE() en la WHERE para normalizar teléfonos
+  en cada consulta (podría optimizarse con un campo normalizado)
+- El deduplicador usa archivo JSON en /data/ para multi-worker sync,
+  pero Gunicorn workers compiten por el lock del archivo
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================
