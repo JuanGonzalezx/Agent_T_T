@@ -1,20 +1,11 @@
 import logging
 from langchain_core.messages import AIMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from app.agent.state import AgentState
-from app.utils.gemini_logger import invoke_with_logging, log_token_usage
 
 logger = logging.getLogger(__name__)
 
-# Instanciamos el modelo aquí para que el nodo tenga su propio "cerebro" redactor
-llm_redactor = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite", # Usamos el que te está funcionando rápido
-    temperature=0.4, # Un poco de creatividad para que no suene robótico
-    max_retries=2
-)
-
 def check_status_node(state: AgentState):
-    """Revisa el estado de la matrícula usando IA para redactar el mensaje."""
+    """Revisa el estado de la matrícula basándose en el campo 'respuesta'."""
     data = state.get('student_data')
     name = state.get('student_name', 'Estudiante')
     
@@ -28,42 +19,37 @@ def check_status_node(state: AgentState):
         return {"messages": [AIMessage(content=msg)]}
 
     # 2. Extraer contexto de la Base de Datos
-    estado_envio = str(data.get('estado_envio', '')).strip().lower()
-    respuesta = str(data.get('respuesta', '')).strip().title() # Quedará como 'Sí', 'No', o 'Default'
+    respuesta_raw = str(data.get('respuesta', 'default')).strip().lower()
     bootcamp = data.get('bootcamp_nombre', 'tu bootcamp')
     modalidad = data.get('modalidad', 'No especificada')
     inicio = data.get('inicio_formacion', 'Pronto')
-
-    # 3. Prompt optimizado (reducido para menos tokens)
-    prompt = f"""Informa estado de matrícula a {name}. Respuesta concisa, formato WhatsApp.
-
-Datos BD:
-- Bootcamp: {bootcamp}
-- Modalidad: {modalidad}
-- Inicio: {inicio}
-- Confirmación: {respuesta}
-- Estado: {estado_envio}
-
-Reglas:
-- Si confirmó "Sí": cupo CONFIRMADO, felicita, indica inicio.
-- Si "No": estado CANCELADO, despide cordialmente.
-- Si matriculado/graduado: felicita.
-- NO pidas confirmar SÍ/NO.
-- Max 4 líneas. Usa emojis con moderación."""
-
-    try:
-        logger.info(f"[STATUS NODO] IA redactando estado para {name} (Respuesta BD: {respuesta})")
-        # Invocamos a Gemini para que haga la magia
-        response = invoke_with_logging(llm_redactor, prompt, context="STATUS_NODO")
-        msg = response.content.strip()
-        
-    except Exception as e:
-        logger.error(f"[STATUS NODO] Error con Gemini redactor: {e}")
-        # Fallback de emergencia por si la API se cae o hay límite de cuota
+    
+    logger.info(f"[STATUS NODO] Consultando estado para {name} (Respuesta BD: '{respuesta_raw}')")
+    
+    # 3. Determinar estado basado en el campo 'respuesta' (NO estado_envio)
+    if respuesta_raw in ['sí', 'si', 'yes']:
+        # El estudiante ya confirmó su cupo
         msg = (
-            f"¡Hola {name}! 👋 Tu estado actual en *{bootcamp}* es: *Confirmado/Registrado*.\n"
-            f"Tu respuesta guardada es: {respuesta}.\n"
-            "Si tienes dudas adicionales, escríbenos a soporte."
+            f"🎉 ¡Hola {name}!\n\n"
+            f"Tu cupo en *{bootcamp}* ({modalidad}) está *CONFIRMADO*.\n\n"
+            f"📅 *Inicio de clases:* {inicio}\n\n"
+            "Pronto recibirás información sobre acceso a la plataforma. ¡Nos vemos! 🚀"
         )
-
+    elif respuesta_raw == 'no':
+        # El estudiante rechazó el cupo
+        msg = (
+            f"Hola {name},\n\n"
+            f"Según nuestros registros, indicaste que no participarás en *{bootcamp}*.\n\n"
+            "Si esto fue un error o cambiaste de opinión, contáctanos a soporte@talentotech.gov.co\n\n"
+            "¡Te esperamos en una próxima convocatoria! 👋"
+        )
+    else:
+        # respuesta_raw == 'default' o vacío: Pendiente de confirmación
+        msg = (
+            f"Hola {name} 👋\n\n"
+            f"Estás registrado/a en *{bootcamp}* ({modalidad}).\n\n"
+            f"📅 *Inicio:* {inicio}\n\n"
+            "⚠️ *Aún no has confirmado tu cupo.* Responde *SÍ* para confirmar o *NO* si no podrás asistir."
+        )
+    
     return {"messages": [AIMessage(content=msg)]}

@@ -31,23 +31,56 @@ def log_token_usage(response: Any, context: str = "GEMINI") -> dict:
     }
     
     try:
-        # LangChain >= 0.1 usa response_metadata
-        if hasattr(response, 'response_metadata'):
-            metadata = response.response_metadata
-            usage_metadata = metadata.get('usage_metadata', {})
-            
-            usage_data["input_tokens"] = usage_metadata.get('prompt_token_count', 0)
-            usage_data["output_tokens"] = usage_metadata.get('candidates_token_count', 0)
-            usage_data["total_tokens"] = usage_metadata.get('total_token_count', 0)
-        
-        # Alternativa: algunos modelos exponen usage_metadata directamente
-        elif hasattr(response, 'usage_metadata'):
+        # Intentar extraer de usage_metadata directamente (LangChain Google GenAI)
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
             usage = response.usage_metadata
-            usage_data["input_tokens"] = getattr(usage, 'input_tokens', 0) or usage.get('input_tokens', 0)
-            usage_data["output_tokens"] = getattr(usage, 'output_tokens', 0) or usage.get('output_tokens', 0)
-            usage_data["total_tokens"] = getattr(usage, 'total_tokens', 0) or usage.get('total_tokens', 0)
+            # Puede ser dict o objeto, manejamos ambos casos
+            if isinstance(usage, dict):
+                usage_data["input_tokens"] = usage.get('input_tokens', 0) or usage.get('prompt_token_count', 0)
+                usage_data["output_tokens"] = usage.get('output_tokens', 0) or usage.get('candidates_token_count', 0)
+                usage_data["total_tokens"] = usage.get('total_tokens', 0) or usage.get('total_token_count', 0)
+            else:
+                usage_data["input_tokens"] = getattr(usage, 'input_tokens', 0)
+                usage_data["output_tokens"] = getattr(usage, 'output_tokens', 0)
+                usage_data["total_tokens"] = getattr(usage, 'total_tokens', 0)
         
-        # Log con formato estructurado (doble output para garantizar visibilidad en Render)
+        # Fallback: LangChain response_metadata
+        elif hasattr(response, 'response_metadata') and response.response_metadata:
+            metadata = response.response_metadata
+            # Buscar en usage_metadata dentro de response_metadata
+            usage_metadata = metadata.get('usage_metadata', metadata)
+            
+            # Probar múltiples nombres de claves (varían según versión)
+            usage_data["input_tokens"] = (
+                usage_metadata.get('input_tokens', 0) or 
+                usage_metadata.get('prompt_token_count', 0) or
+                usage_metadata.get('promptTokenCount', 0)
+            )
+            usage_data["output_tokens"] = (
+                usage_metadata.get('output_tokens', 0) or 
+                usage_metadata.get('candidates_token_count', 0) or
+                usage_metadata.get('candidatesTokenCount', 0)
+            )
+            usage_data["total_tokens"] = (
+                usage_metadata.get('total_tokens', 0) or 
+                usage_metadata.get('total_token_count', 0) or
+                usage_metadata.get('totalTokenCount', 0)
+            )
+            
+            # Si aún es 0, calcular total
+            if usage_data["total_tokens"] == 0:
+                usage_data["total_tokens"] = usage_data["input_tokens"] + usage_data["output_tokens"]
+        
+        # Debug: si todo sigue en 0, loggear la estructura completa
+        if usage_data["total_tokens"] == 0:
+            debug_info = {}
+            if hasattr(response, 'usage_metadata'):
+                debug_info['usage_metadata'] = str(response.usage_metadata)
+            if hasattr(response, 'response_metadata'):
+                debug_info['response_metadata'] = str(response.response_metadata)[:500]
+            logger.debug(f"[{context}] DEBUG metadata: {debug_info}")
+        
+        # Log con formato estructurado
         msg = (
             f"[{context}] 📊 Tokens usados - "
             f"Input: {usage_data['input_tokens']} | "
