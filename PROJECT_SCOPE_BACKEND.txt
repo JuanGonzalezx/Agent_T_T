@@ -52,7 +52,7 @@ Agent_T_T/
 │
 ├── .env.example                    # Plantilla de variables de entorno
 │
-├── data/                           # Carpeta para BD SQLite local y cache dedup
+├── data/                           # Carpeta para BD SQLite local (desarrollo)
 │
 ├── templates/
 │   └── privacy.html                # Política de privacidad (requerida por Meta)
@@ -118,7 +118,7 @@ Agent_T_T/
 │   └── utils/                      # UTILIDADES
 │       ├── data_normalizer.py      # Normalización de teléfonos y DataFrames
 │       ├── gemini_logger.py        # Log de tokens usados en cada llamada Gemini
-│       └── message_dedup.py        # Cache híbrido (memoria+archivo) dedup
+│       └── message_dedup.py        # Cache de deduplicación en RAM pura (LRU)
 
 
 ================================================================================
@@ -185,10 +185,16 @@ FLUJO 1: MENSAJE ENTRANTE DE WHATSAPP (MODO IA)
 2. webhook_controller.py:
    a. Parsea JSON
    b. Ignora si es status (sent/delivered/read)
-   c. Extrae: message_id, from_number, text, type
-   d. Verifica deduplicación (MessageDeduplicator)
-   e. Si duplicado → responde 200 y termina
-   f. Si nuevo → responde 200 inmediato + lanza thread background
+   c. Extrae: message_id, from_number, timestamp, type
+   d. Filtro de tiempo: si mensaje >5 min antiguo → descarta (evita reintentos de Meta)
+   e. Verifica deduplicación atómica en RAM (MessageDeduplicator)
+   f. Si duplicado → responde 200 y termina
+   g. Extrae texto según tipo:
+      - text: body directo
+      - interactive/button_reply: título del botón
+      - interactive/list_reply: título de la opción
+      - button (legacy): texto del botón
+   h. Si nuevo → responde 200 inmediato + lanza thread background (daemon)
 
 3. process_message_background():
    a. Crea HumanMessage con el texto
@@ -514,12 +520,16 @@ llm_fallback_node(state)            → FAQ con Gemini
   USA IA (última opción)
 
 ──── app/controllers/webhook_controller.py ────
-extract_message_data(body)          → Parsea webhook JSON de Meta
-  Filtra statuses, extrae text/button/interactive
 webhook()                           → Endpoint GET (verificación) + POST (mensajes)
   GET: handshake con Meta (verify_token)
-  POST: dedup → background thread → agente
-process_message_background()        → Thread: agent.invoke() + enviar respuesta
+  POST: 
+    1. Ignora statuses (sent/delivered/read)
+    2. Valida datos mínimos (msg_id, from_number)
+    3. Filtro de tiempo: descarta mensajes >5 min antiguos
+    4. Deduplicación atómica en RAM
+    5. Extrae texto según tipo (text/interactive/button)
+    6. Lanza thread daemon → agente IA o legacy
+process_message_background()        → Thread daemon: agent.invoke() + enviar respuesta
 
 ──── app/controllers/message_controller.py ────
 send_simple_message()               → Envía texto o plantilla individual
@@ -617,16 +627,19 @@ log_token_usage(response, context)  → Extrae input/output/total tokens
 invoke_with_logging(llm, prompt, context) → llm.invoke() + log_token_usage()
 
 ──── app/utils/message_dedup.py ────
-MessageDeduplicator.__init__()      → Cache en memoria + archivo JSON
-check_and_mark(message_id)          → Atómico: verifica + marca
-  1. Busca en memoria local
-  2. Busca en archivo (multi-worker)
-  3. Si nuevo → marca ambos
-is_duplicate(message_id)            → Solo verifica, no marca
-mark_processed(message_id)          → Marca sin verificar
-_cleanup_expired()                  → Limpia TTL expirados
-stats()                             → Info del cache
-get_deduplicator()                  → Singleton thread-safe
+MessageDeduplicator                 → Cache de deduplicación en MEMORIA RAM pura
+  Optimizado para Gunicorn 1 Worker + Multi-Threads
+  Sin archivos (File I/O eliminado para velocidad máxima)
+  Usa OrderedDict como cache LRU natural
+__init__(ttl_seconds=300, max_entries=5000)
+  ttl_seconds: tiempo de vida de cada entrada (default 5 min)
+  max_entries: límite de entradas antes de pop FIFO (default 5000)
+check_and_mark(message_id) → bool   → Atómico: verifica + marca
+  Retorna True si duplicado, False si nuevo
+  Si es nuevo, lo marca inmediatamente
+  Si expiró, lo renueva (tratado como nuevo)
+  Thread-safe con threading.Lock
+get_deduplicator()                  → Singleton thread-safe (double-check locking)
 
 ──── app/utils/data_normalizer.py ────
 normalize_column_name(col)          → Minúsculas, sin acentos ni especiales
@@ -697,9 +710,8 @@ TestMessageDeduplicator:
   - test_expired_message_not_duplicate
   - test_empty_message_id
   - test_none_message_id
-  - test_stats
-  - test_is_duplicate_separate_from_mark
   - test_thread_safety (10 threads concurrentes)
+  - test_max_entries_eviction (LRU eviction)
 
 TestRouterFastPath:
   - test_status_keywords (estado, matrícula, inscripción, etc.)
@@ -842,8 +854,11 @@ PUNTOS DE ATENCIÓN:
 - No hay autenticación en los endpoints REST (excepto webhook)
 - db_handler usa REPLACE() en la WHERE para normalizar teléfonos
   en cada consulta (podría optimizarse con un campo normalizado)
-- El deduplicador usa archivo JSON en /data/ para multi-worker sync,
-  pero Gunicorn workers compiten por el lock del archivo
+- El deduplicador usa RAM pura con OrderedDict LRU (5000 entradas max,
+  TTL 5 min). Optimizado para 1 worker Gunicorn con multi-threading.
+  Sin File I/O para máxima velocidad.
+- Webhook descarta mensajes con timestamp >5 min para evitar procesar
+  reintentos antiguos de Meta
 
 ================================================================================
 FIN DEL DOCUMENTO
