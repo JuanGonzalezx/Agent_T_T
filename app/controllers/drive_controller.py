@@ -1,7 +1,7 @@
 import io
 from flask import Blueprint, request, jsonify, current_app
 from app import google_drive_service, db_handler, sync_service
-from app.utils.data_normalizer import normalize_phone_column, clean_phone_numbers, add_tracking_columns, validate_dataframe
+from app.utils.data_normalizer import normalize_phone_column, clean_phone_numbers, add_tracking_columns, validate_dataframe, map_column_aliases, concatenate_name_columns
 
 drive_bp = Blueprint('drive', __name__)
 
@@ -38,6 +38,8 @@ def upload_from_google():
         if not success: return jsonify({'success': False, 'error': error}), 400
         
         df = clean_phone_numbers(df)
+        df = map_column_aliases(df)
+        df = concatenate_name_columns(df)
         df = add_tracking_columns(df)
         
         # 4. Validar

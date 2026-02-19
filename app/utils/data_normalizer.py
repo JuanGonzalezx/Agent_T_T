@@ -28,6 +28,87 @@ def normalize_column_name(col_name: str) -> str:
     return normalized.replace(' ', '').replace('_', '').replace('-', '')
 
 
+def map_column_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Mapea columnas del Excel con nombres alternativos a los nombres estándar del sistema.
+
+    Aliases soportados:
+      - Numero_documento / numero_documento / cedula → documento
+      - Correo / correo_electronico → email
+      - nombre2 / Apellido1 / Apellido2 se mantienen para concatenación posterior
+
+    Args:
+        df: DataFrame con columnas originales del Excel
+
+    Returns:
+        DataFrame: DataFrame con columnas renombradas si aplica
+    """
+    # Crear mapeo normalizado → nombre original
+    normalized_map = {normalize_column_name(c): c for c in df.columns}
+
+    alias_targets = {
+        'documento': ['numerodocumento', 'cedula', 'numerocedula', 'nrodocumento', 'nodocumento', 'identificacion'],
+        'email': ['correo', 'correoelectronico', 'mail', 'emailestudiante'],
+    }
+
+    for target_col, aliases in alias_targets.items():
+        if target_col not in df.columns:
+            for alias in aliases:
+                if alias in normalized_map:
+                    df = df.rename(columns={normalized_map[alias]: target_col})
+                    break
+
+    return df
+
+
+def concatenate_name_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Concatena múltiples columnas de nombre en una sola columna 'nombre'.
+
+    Si el DataFrame tiene columnas como nombre, nombre2, Apellido1, Apellido2,
+    las concatena en un solo campo 'nombre' separado por espacios.
+
+    Patrón detectado: nombre + nombre2 + apellido1 + apellido2
+    Si solo existe 'nombre', no hace nada.
+
+    Args:
+        df: DataFrame que podría tener columnas de nombre fragmentadas
+
+    Returns:
+        DataFrame: DataFrame con columna 'nombre' consolidada
+    """
+    # Normalizar para detección
+    normalized_map = {normalize_column_name(c): c for c in df.columns}
+
+    # Componentes de nombre en orden (normalizado → original)
+    name_parts_keys = ['nombre', 'nombre2', 'apellido1', 'apellido2']
+    found_parts = []
+    for key in name_parts_keys:
+        if key in normalized_map:
+            found_parts.append(normalized_map[key])
+
+    # Solo concatenar si hay más de 1 componente de nombre
+    if len(found_parts) <= 1:
+        return df
+
+    # Concatenar partes en 'nombre'
+    def _concat_row(row):
+        parts = []
+        for col in found_parts:
+            val = str(row.get(col, '')).strip()
+            if val and val != 'nan' and val != '-':
+                parts.append(val)
+        return ' '.join(parts) if parts else ''
+
+    df['nombre'] = df.apply(_concat_row, axis=1)
+
+    # Eliminar columnas fragmentadas (excepto 'nombre' original si es una de ellas)
+    cols_to_drop = [c for c in found_parts if c != 'nombre' and c in df.columns]
+    df = df.drop(columns=cols_to_drop)
+
+    return df
+
+
 def normalize_phone_column(df: pd.DataFrame) -> Tuple[bool, pd.DataFrame, str]:
     """
     Normaliza y mapea la columna de teléfono a 'telefono_e164'.

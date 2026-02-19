@@ -547,23 +547,113 @@ class DatabaseHandler:
         """Alias de get_estudiantes_opt_in (compatibilidad)."""
         return self.get_estudiantes_opt_in()
 
-    def get_all_estudiantes(self, limit: int = 100, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
-        """Obtiene todos los estudiantes con paginación (JOIN a bootcamp)."""
-        try:
-            total_result = self._execute_query("SELECT COUNT(*) as total FROM estudiantes", fetch_one=True)
-            total = int(total_result.get('total', 0)) if total_result else 0
+    def get_estudiantes_sin_campana_enviada(self, tipo: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene estudiantes que NO tienen una campaña del tipo dado con estado_envio='sent'.
 
+        Útil para evitar enviar dos veces la misma campaña (ej: MATRICULA) al mismo estudiante.
+
+        Args:
+            tipo: Tipo de campaña (MATRICULA, EVENTO, INFO)
+        """
+        try:
             query = '''
                 SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
                        b.modalidad, b.horario, b.lugar,
                        b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                 FROM estudiantes e
                 LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
-                ORDER BY e.fecha_creacion DESC
-                LIMIT ? OFFSET ?
+                WHERE e.id NOT IN (
+                    SELECT cm.estudiante_id
+                    FROM campana_miembros cm
+                    JOIN campanas c ON cm.campana_id = c.id
+                    WHERE c.tipo = ?
+                      AND cm.estado_envio = 'sent'
+                )
+                ORDER BY e.id ASC
             '''
-            rows = self._execute_query(query, (limit, offset), fetch_all=True) or []
-            return rows, total
+            return self._execute_query(query, (tipo.upper(),), fetch_all=True) or []
+        except Exception as e:
+            print(f"Error obteniendo estudiantes sin campaña enviada: {str(e)}")
+            return []
+
+    def get_estudiantes_by_campana(self, campana_id: int) -> List[Dict[str, Any]]:
+        """
+        Obtiene estudiantes asociados a una campaña (vía campana_miembros).
+
+        Args:
+            campana_id: ID de la campaña
+        """
+        try:
+            query = '''
+                SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
+                       b.modalidad, b.horario, b.lugar,
+                       b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica,
+                       cm.estado_envio as cm_estado_envio,
+                       cm.respuesta_usuario as cm_respuesta,
+                       cm.fecha_envio as cm_fecha_envio
+                FROM campana_miembros cm
+                JOIN estudiantes e ON cm.estudiante_id = e.id
+                LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
+                WHERE cm.campana_id = ?
+                ORDER BY e.nombre ASC
+            '''
+            return self._execute_query(query, (campana_id,), fetch_all=True) or []
+        except Exception as e:
+            print(f"Error obteniendo estudiantes de campaña: {str(e)}")
+            return []
+
+    def get_all_estudiantes(self, limit: int = 100, offset: int = 0,
+                            campana_id: int = None) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Obtiene todos los estudiantes con paginación (JOIN a bootcamp).
+
+        Args:
+            limit: Cantidad máxima de registros
+            offset: Desplazamiento para paginación
+            campana_id: Si se proporciona, filtra solo miembros de esa campaña
+        """
+        try:
+            if campana_id:
+                # Filtro por campaña: INNER JOIN con campana_miembros
+                total_result = self._execute_query(
+                    "SELECT COUNT(*) as total FROM campana_miembros WHERE campana_id = ?",
+                    (campana_id,), fetch_one=True
+                )
+                total = int(total_result.get('total', 0)) if total_result else 0
+
+                query = '''
+                    SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
+                           b.modalidad, b.horario, b.lugar,
+                           b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica,
+                           cm.estado_envio as cm_estado_envio,
+                           cm.respuesta_usuario as cm_respuesta,
+                           cm.fecha_envio as cm_fecha_envio
+                    FROM campana_miembros cm
+                    JOIN estudiantes e ON cm.estudiante_id = e.id
+                    LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
+                    WHERE cm.campana_id = ?
+                    ORDER BY e.nombre ASC
+                    LIMIT ? OFFSET ?
+                '''
+                rows = self._execute_query(query, (campana_id, limit, offset), fetch_all=True) or []
+                return rows, total
+            else:
+                # Sin filtro: todos los estudiantes
+                total_result = self._execute_query("SELECT COUNT(*) as total FROM estudiantes", fetch_one=True)
+                total = int(total_result.get('total', 0)) if total_result else 0
+
+                query = '''
+                    SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
+                           b.modalidad, b.horario, b.lugar,
+                           b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
+                    FROM estudiantes e
+                    LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
+                    ORDER BY e.fecha_creacion DESC
+                    LIMIT ? OFFSET ?
+                '''
+                rows = self._execute_query(query, (limit, offset), fetch_all=True) or []
+                return rows, total
         except Exception as e:
             print(f"Error obteniendo todos los estudiantes: {str(e)}")
             return [], 0

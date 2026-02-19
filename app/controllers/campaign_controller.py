@@ -14,6 +14,27 @@ from app import whatsapp_service, db_handler
 campaign_bp = Blueprint('campaigns', __name__)
 logger = logging.getLogger(__name__)
 
+# ─── Plantillas por defecto según tipo de campaña ───
+TEMPLATE_DEFAULTS = {
+    'MATRICULA': 'prueba_matricula',
+    'EVENTO': 'confirmacion_evento_quindio',
+    'INFO': 'confirmacion_evento_quindio',
+}
+
+
+@campaign_bp.route('/templates', methods=['GET'])
+def get_templates():
+    """
+    Devuelve el mapeo de tipos de campaña → plantilla de Meta por defecto.
+    El frontend lo usa para preseleccionar la plantilla al elegir tipo.
+    """
+    tipos = [
+        {'tipo': 'MATRICULA', 'plantilla': TEMPLATE_DEFAULTS['MATRICULA'], 'descripcion': 'Confirmación de matrícula'},
+        {'tipo': 'EVENTO', 'plantilla': TEMPLATE_DEFAULTS['EVENTO'], 'descripcion': 'Confirmación de evento'},
+        {'tipo': 'INFO', 'plantilla': TEMPLATE_DEFAULTS['INFO'], 'descripcion': 'Mensaje informativo'},
+    ]
+    return jsonify({'success': True, 'templates': tipos}), 200
+
 
 @campaign_bp.route('', methods=['POST'])
 def create_campaign():

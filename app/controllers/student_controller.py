@@ -8,7 +8,13 @@ def get_all_estudiantes():
     try:
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
-        estudiantes, total = db_handler.get_all_estudiantes(limit, offset)
+        campana_id = request.args.get('campana_id')
+        if campana_id:
+            try:
+                campana_id = int(campana_id)
+            except (ValueError, TypeError):
+                campana_id = None
+        estudiantes, total = db_handler.get_all_estudiantes(limit, offset, campana_id=campana_id)
         return jsonify({'success': True, 'total': total, 'estudiantes': estudiantes}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
