@@ -10,5 +10,8 @@ class AgentState(TypedDict):
     student_name: Optional[str]
     student_data: Optional[dict]
     
+    # Campaña activa (si el estudiante tiene una campaña esperando respuesta)
+    active_campaign: Optional[dict]
+    
     # Intención detectada por Gemini
     intent: Optional[str]

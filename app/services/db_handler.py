@@ -269,7 +269,52 @@ class DatabaseHandler:
             ON estudiantes(fecha_envio)''',
             
             '''CREATE INDEX IF NOT EXISTS idx_estudiantes_respuesta 
-            ON estudiantes(respuesta)'''
+            ON estudiantes(respuesta)''',
+            
+            # ==================== TABLAS DE CAMPAÑAS ====================
+            
+            # Tabla de campañas (envíos masivos tipados)
+            '''CREATE TABLE IF NOT EXISTS campanas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                tipo TEXT NOT NULL,
+                bootcamp_objetivo_id TEXT,
+                plantilla_whatsapp TEXT,
+                estado TEXT DEFAULT 'DRAFT',
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''',
+            
+            # Tabla de miembros de campaña (tracking individual)
+            '''CREATE TABLE IF NOT EXISTS campana_miembros (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campana_id INTEGER NOT NULL,
+                estudiante_id INTEGER NOT NULL,
+                variables_contexto TEXT,
+                estado_envio TEXT DEFAULT 'pending',
+                message_id TEXT,
+                respuesta_usuario TEXT,
+                mensaje_respuesta_raw TEXT,
+                fecha_envio TIMESTAMP,
+                fecha_respuesta TIMESTAMP,
+                FOREIGN KEY(campana_id) REFERENCES campanas(id),
+                FOREIGN KEY(estudiante_id) REFERENCES estudiantes(id)
+            )''',
+            
+            # Índices para campañas
+            '''CREATE INDEX IF NOT EXISTS idx_campanas_tipo 
+            ON campanas(tipo)''',
+            
+            '''CREATE INDEX IF NOT EXISTS idx_campanas_estado 
+            ON campanas(estado)''',
+            
+            '''CREATE INDEX IF NOT EXISTS idx_campana_miembros_campana 
+            ON campana_miembros(campana_id)''',
+            
+            '''CREATE INDEX IF NOT EXISTS idx_campana_miembros_estudiante 
+            ON campana_miembros(estudiante_id)''',
+            
+            '''CREATE INDEX IF NOT EXISTS idx_campana_miembros_estado 
+            ON campana_miembros(estado_envio)'''
         ]
         
         if self.use_turso:
@@ -285,6 +330,249 @@ class DatabaseHandler:
             conn.close()
     
     # ==================== BOOTCAMPS ====================
+    
+    # ==================== CAMPAÑAS ====================
+    
+    def insert_campana(self, nombre: str, tipo: str, plantilla_whatsapp: str = None,
+                       bootcamp_objetivo_id: str = None) -> Tuple[bool, Any]:
+        """
+        Crea una nueva campaña.
+        
+        Args:
+            nombre: Nombre de la campaña (ej: "Evento Quindío")
+            tipo: Tipo de campaña: MATRICULA, EVENTO, INFO
+            plantilla_whatsapp: Nombre del template en Meta
+            bootcamp_objetivo_id: Código de bootcamp (opcional, filtro)
+            
+        Returns:
+            Tuple[bool, int|str]: (éxito, id_campana o mensaje error)
+        """
+        if not nombre or not tipo:
+            return False, "nombre y tipo son requeridos"
+        
+        tipo = tipo.upper()
+        if tipo not in ('MATRICULA', 'EVENTO', 'INFO'):
+            return False, f"Tipo inválido: {tipo}. Debe ser MATRICULA, EVENTO o INFO"
+        
+        try:
+            query = '''
+                INSERT INTO campanas (nombre, tipo, plantilla_whatsapp, bootcamp_objetivo_id, estado)
+                VALUES (?, ?, ?, ?, 'DRAFT')
+            '''
+            self._execute_query(query, (nombre, tipo, plantilla_whatsapp or '', bootcamp_objetivo_id or ''))
+            
+            # Obtener el ID de la campaña recién creada
+            result = self._execute_query(
+                "SELECT MAX(id) as last_id FROM campanas",
+                fetch_one=True
+            )
+            campana_id = int(result['last_id']) if result and result.get('last_id') else 0
+            
+            return True, campana_id
+        except Exception as e:
+            return False, f"Error creando campaña: {str(e)}"
+    
+    def get_campana_by_id(self, campana_id: int) -> Optional[Dict[str, Any]]:
+        """Obtiene una campaña por su ID."""
+        try:
+            return self._execute_query(
+                "SELECT * FROM campanas WHERE id = ?",
+                (campana_id,), fetch_one=True
+            )
+        except Exception as e:
+            print(f"Error obteniendo campaña: {str(e)}")
+            return None
+    
+    def get_all_campanas(self) -> List[Dict[str, Any]]:
+        """Obtiene todas las campañas ordenadas por fecha de creación."""
+        try:
+            return self._execute_query(
+                "SELECT * FROM campanas ORDER BY fecha_creacion DESC",
+                fetch_all=True
+            ) or []
+        except Exception as e:
+            print(f"Error listando campañas: {str(e)}")
+            return []
+    
+    def update_campana_estado(self, campana_id: int, estado: str) -> Tuple[bool, str]:
+        """Actualiza el estado de una campaña (DRAFT, SENDING, COMPLETED)."""
+        try:
+            self._execute_query(
+                "UPDATE campanas SET estado = ? WHERE id = ?",
+                (estado, campana_id)
+            )
+            return True, f"Campaña {campana_id} actualizada a {estado}"
+        except Exception as e:
+            return False, f"Error actualizando campaña: {str(e)}"
+    
+    def insert_campana_miembros(self, campana_id: int, estudiante_ids: List[int],
+                                 variables_contexto_list: List[str] = None) -> Tuple[bool, str]:
+        """
+        Agrega miembros a una campaña.
+        
+        Args:
+            campana_id: ID de la campaña
+            estudiante_ids: Lista de IDs de estudiantes
+            variables_contexto_list: Lista de JSON strings con variables por estudiante
+            
+        Returns:
+            Tuple[bool, str]: (éxito, mensaje)
+        """
+        try:
+            for i, est_id in enumerate(estudiante_ids):
+                variables = (variables_contexto_list[i] 
+                           if variables_contexto_list and i < len(variables_contexto_list) 
+                           else '')
+                self._execute_query('''
+                    INSERT INTO campana_miembros (campana_id, estudiante_id, variables_contexto, estado_envio)
+                    VALUES (?, ?, ?, 'pending')
+                ''', (campana_id, est_id, variables))
+            
+            return True, f"{len(estudiante_ids)} miembros agregados a campaña {campana_id}"
+        except Exception as e:
+            return False, f"Error agregando miembros: {str(e)}"
+    
+    def get_miembros_pendientes_envio(self, campana_id: int) -> List[Dict[str, Any]]:
+        """
+        Obtiene miembros de una campaña pendientes de envío.
+        Incluye datos del estudiante para construir el mensaje.
+        """
+        try:
+            query = '''
+                SELECT cm.id as miembro_id, cm.campana_id, cm.estudiante_id,
+                       cm.variables_contexto, cm.estado_envio,
+                       e.telefono_e164, e.nombre, e.bootcamp_id, e.bootcamp_nombre,
+                       e.modalidad, e.horario, e.lugar, e.inicio_formacion,
+                       e.ingles_inicio, e.ingles_fin
+                FROM campana_miembros cm
+                JOIN estudiantes e ON cm.estudiante_id = e.id
+                WHERE cm.campana_id = ?
+                  AND cm.estado_envio = 'pending'
+                ORDER BY cm.id ASC
+            '''
+            return self._execute_query(query, (campana_id,), fetch_all=True) or []
+        except Exception as e:
+            print(f"Error obteniendo miembros pendientes: {str(e)}")
+            return []
+    
+    def update_miembro_estado_envio(self, miembro_id: int, estado: str, 
+                                     message_id: str = None) -> Tuple[bool, str]:
+        """Actualiza el estado de envío de un miembro de campaña."""
+        try:
+            from datetime import datetime
+            self._execute_query('''
+                UPDATE campana_miembros
+                SET estado_envio = ?, message_id = ?, fecha_envio = ?
+                WHERE id = ?
+            ''', (estado, message_id or '', datetime.now().isoformat(), miembro_id))
+            return True, f"Miembro {miembro_id} actualizado a {estado}"
+        except Exception as e:
+            return False, f"Error actualizando miembro: {str(e)}"
+    
+    def update_miembro_respuesta(self, miembro_id: int, respuesta: str, 
+                                  raw_text: str = '') -> Tuple[bool, str]:
+        """Actualiza la respuesta de un miembro de campaña."""
+        try:
+            from datetime import datetime
+            self._execute_query('''
+                UPDATE campana_miembros
+                SET respuesta_usuario = ?, mensaje_respuesta_raw = ?, fecha_respuesta = ?
+                WHERE id = ?
+            ''', (respuesta, raw_text, datetime.now().isoformat(), miembro_id))
+            return True, f"Respuesta '{respuesta}' registrada para miembro {miembro_id}"
+        except Exception as e:
+            return False, f"Error actualizando respuesta: {str(e)}"
+    
+    def get_campana_activa_for_student(self, estudiante_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Busca si un estudiante tiene una campaña activa esperando respuesta.
+        
+        Prioriza la campaña más reciente con estado_envio='sent' y sin respuesta.
+        Retorna datos de campaña + miembro.
+        """
+        try:
+            query = '''
+                SELECT cm.id as miembro_id, cm.campana_id, cm.estudiante_id,
+                       cm.estado_envio as miembro_estado_envio,
+                       cm.respuesta_usuario, cm.variables_contexto,
+                       c.nombre as campana_nombre, c.tipo as campana_tipo,
+                       c.plantilla_whatsapp, c.estado as campana_estado
+                FROM campana_miembros cm
+                JOIN campanas c ON cm.campana_id = c.id
+                WHERE cm.estudiante_id = ?
+                  AND cm.estado_envio = 'sent'
+                  AND (cm.respuesta_usuario IS NULL OR cm.respuesta_usuario = '')
+                  AND c.estado IN ('SENDING', 'COMPLETED')
+                ORDER BY cm.fecha_envio DESC
+                LIMIT 1
+            '''
+            return self._execute_query(query, (estudiante_id,), fetch_one=True)
+        except Exception as e:
+            print(f"Error buscando campaña activa: {str(e)}")
+            return None
+    
+    def get_campana_stats(self, campana_id: int) -> Dict[str, Any]:
+        """Obtiene estadísticas de una campaña específica."""
+        try:
+            def get_count(query, params=None):
+                result = self._execute_query(query, params, fetch_one=True)
+                if not result:
+                    return 0
+                val = list(result.values())[0]
+                if isinstance(val, dict):
+                    return int(val.get('value', 0))
+                return int(val) if val else 0
+            
+            total = get_count(
+                "SELECT COUNT(*) as c FROM campana_miembros WHERE campana_id = ?", (campana_id,))
+            enviados = get_count(
+                "SELECT COUNT(*) as c FROM campana_miembros WHERE campana_id = ? AND estado_envio = 'sent'", (campana_id,))
+            pendientes = get_count(
+                "SELECT COUNT(*) as c FROM campana_miembros WHERE campana_id = ? AND estado_envio = 'pending'", (campana_id,))
+            errores = get_count(
+                "SELECT COUNT(*) as c FROM campana_miembros WHERE campana_id = ? AND estado_envio = 'error'", (campana_id,))
+            
+            # Respuestas (genérico para cualquier tipo de campaña)
+            respondidos = get_count(
+                "SELECT COUNT(*) as c FROM campana_miembros WHERE campana_id = ? AND respuesta_usuario IS NOT NULL AND respuesta_usuario != ''", (campana_id,))
+            
+            # Detalle de respuestas
+            respuestas_detalle = self._execute_query('''
+                SELECT respuesta_usuario, COUNT(*) as cantidad
+                FROM campana_miembros 
+                WHERE campana_id = ? AND respuesta_usuario IS NOT NULL AND respuesta_usuario != ''
+                GROUP BY respuesta_usuario
+            ''', (campana_id,), fetch_all=True) or []
+            
+            campana = self.get_campana_by_id(campana_id)
+            
+            return {
+                'campana_id': campana_id,
+                'campana_nombre': campana.get('nombre', '') if campana else '',
+                'campana_tipo': campana.get('tipo', '') if campana else '',
+                'total_miembros': total,
+                'enviados': enviados,
+                'pendientes_envio': pendientes,
+                'errores_envio': errores,
+                'total_respondidos': respondidos,
+                'sin_respuesta': enviados - respondidos,
+                'tasa_respuesta': round(respondidos / enviados * 100, 2) if enviados > 0 else 0,
+                'respuestas_detalle': {r.get('respuesta_usuario', ''): int(r.get('cantidad', 0)) for r in respuestas_detalle}
+            }
+        except Exception as e:
+            print(f"Error obteniendo stats de campaña: {str(e)}")
+            return {}
+    
+    def delete_campana(self, campana_id: int) -> Tuple[bool, str]:
+        """Elimina una campaña y sus miembros."""
+        try:
+            self._execute_query("DELETE FROM campana_miembros WHERE campana_id = ?", (campana_id,))
+            self._execute_query("DELETE FROM campanas WHERE id = ?", (campana_id,))
+            return True, f"Campaña {campana_id} eliminada"
+        except Exception as e:
+            return False, f"Error eliminando campaña: {str(e)}"
+    
+    # ==================== BOOTCAMPS (continuación) ====================
     
     def insert_or_update_bootcamp(self, bootcamp_id: str, bootcamp_nombre: str) -> Tuple[bool, str]:
         """

@@ -11,6 +11,7 @@ from app.agent.nodes import (
     check_status_node,
     platform_access_node,
     confirm_response_node,
+    confirm_event_node,
     llm_fallback_node,
     quick_response_node
 )
@@ -45,6 +46,23 @@ def router(state: AgentState):
         last_msg = str(last_message).strip().lower()
     
     logger.info(f"[ROUTER] Procesando mensaje: '{last_msg}'")
+    
+    # ==========================================================
+    # 🎯 PRIORIDAD 0: Campaña activa esperando respuesta
+    # ==========================================================
+    # Si el estudiante tiene una campaña (EVENTO, etc.) con envío hecho
+    # y sin respuesta, enrutar al nodo correspondiente.
+    active_campaign = state.get('active_campaign')
+    
+    if active_campaign:
+        campana_tipo = active_campaign.get('campana_tipo', '').upper()
+        respuesta_usuario = active_campaign.get('respuesta_usuario', '')
+        
+        if not respuesta_usuario or respuesta_usuario.strip() == '':
+            if campana_tipo == 'EVENTO':
+                logger.info(f"[ROUTER] Campaña EVENTO activa → CONFIRM_EVENT")
+                return {"intent": "CONFIRM_EVENT"}
+            # Futuro: otros tipos de campaña aquí
     
     # ==========================================================
     # 🔒 REGLA DE ORO DEL FLUJO 1: Modo "Confirmación Estricta"
@@ -190,6 +208,7 @@ def decide_next_node(state: AgentState):
     """Semáforo que dirige el tráfico según la intención."""
     intent = state.get('intent')
     
+    if intent == 'CONFIRM_EVENT': return "confirm_event"
     if intent == 'CONFIRM': return "confirm_response"
     if intent == 'STATUS': return "check_status"
     if intent == 'ACCESS': return "platform_access"
@@ -210,6 +229,7 @@ def build_agent_graph():
     
     workflow.add_node("load_context", load_context_node)
     workflow.add_node("router_gemini", router)
+    workflow.add_node("confirm_event", confirm_event_node)
     workflow.add_node("confirm_response", confirm_response_node)
     workflow.add_node("check_status", check_status_node)
     workflow.add_node("platform_access", platform_access_node)
@@ -223,6 +243,7 @@ def build_agent_graph():
         "router_gemini",
         decide_next_node,
         {
+            "confirm_event": "confirm_event",
             "confirm_response": "confirm_response",
             "check_status": "check_status",
             "platform_access": "platform_access",
@@ -231,6 +252,7 @@ def build_agent_graph():
         }
     )
     
+    workflow.add_edge("confirm_event", END)
     workflow.add_edge("confirm_response", END)
     workflow.add_edge("check_status", END)
     workflow.add_edge("platform_access", END)

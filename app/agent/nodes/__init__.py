@@ -2,6 +2,7 @@ from .load_context import load_context_node
 from .status import check_status_node
 from .platform import platform_access_node
 from .confirm import confirm_response_node
+from .confirm_event import confirm_event_node
 from .fallback import llm_fallback_node
 from .quick_response import quick_response_node
 
@@ -10,6 +11,7 @@ __all__ = [
     "check_status_node",
     "platform_access_node",
     "confirm_response_node",
+    "confirm_event_node",
     "llm_fallback_node",
     "quick_response_node"
 ]

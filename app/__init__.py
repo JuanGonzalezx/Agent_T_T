@@ -67,6 +67,7 @@ def create_app():
     from app.controllers.drive_controller import drive_bp
     from app.controllers.student_controller import student_bp
     from app.controllers.bootcamp_controller import bootcamp_bp
+    from app.controllers.campaign_controller import campaign_bp
 
     app.register_blueprint(system_bp)
     app.register_blueprint(webhook_bp)
@@ -74,6 +75,7 @@ def create_app():
     app.register_blueprint(drive_bp, url_prefix='/api') # Incluye /google y /sync
     app.register_blueprint(student_bp, url_prefix='/api') # Incluye /estudiantes y /contacts
     app.register_blueprint(bootcamp_bp, url_prefix='/api/bootcamps')
+    app.register_blueprint(campaign_bp, url_prefix='/api/campaigns')
 
     # Manejadores de Error Globales
     @app.errorhandler(404)

@@ -14,6 +14,8 @@ para el programa Talento Tech del MinTIC (Colombia). Permite:
 - Recibir mensajes de WhatsApp y responder automáticamente con IA (Gemini)
 - Envío masivo de mensajes de plantilla a estudiantes
 - Confirmación de matrícula (Sí/No) con registro en base de datos
+- Sistema de Campañas multi-tipo (MATRICULA, EVENTO, INFO)
+- Confirmación de asistencia a eventos (Asisto/No Asisto)
 - Consultas de estado de inscripción
 - FAQs automáticas sobre el programa
 - Sincronización bidireccional con Google Drive
@@ -92,26 +94,30 @@ Agent_T_T/
 │   │   ├── message_controller.py   # POST /api/messages/send-simple, send-batch
 │   │   ├── student_controller.py   # CRUD /api/estudiantes/*, /api/contacts/*
 │   │   ├── bootcamp_controller.py  # CRUD /api/bootcamps/*
+│   │   ├── campaign_controller.py  # CRUD+Envío /api/campaigns/* (NUEVO)
 │   │   └── drive_controller.py     # POST /api/google/upload, /api/sync/*
 │   │
 │   ├── services/                   # CAPA DE NEGOCIO
 │   │   ├── whatsapp_service.py     # Comunicación con Meta Graph API
-│   │   ├── db_handler.py           # CRUD Turso/SQLite (1130 líneas)
+│   │   ├── db_handler.py           # CRUD Turso/SQLite (~1300 líneas)
 │   │   ├── google_drive_service.py # Descarga/actualización de archivos Drive
 │   │   └── sync_service.py         # Scheduler cada 5 min para sync con Drive
 │   │
 │   ├── agent/                      # AGENTE IA CON LANGGRAPH
 │   │   ├── __init__.py             # Exports: get_agent, build_agent_graph
 │   │   ├── state.py                # AgentState (TypedDict): messages, phone,
-│   │   │                           # student_name, student_data, intent
+│   │   │                           # student_name, student_data, intent,
+│   │   │                           # active_campaign
 │   │   ├── graph.py                # Grafo LangGraph: router + nodos + edges
 │   │   │                           # Router con Fast-Path (keywords) + Gemini fallback
+│   │   │                           # Prioridad 0: campañas activas (CONFIRM_EVENT)
 │   │   └── nodes/                  # Nodos especializados del grafo
 │   │       ├── __init__.py         # Re-exports de todos los nodos
-│   │       ├── load_context.py     # Carga datos del estudiante desde BD
+│   │       ├── load_context.py     # Carga datos del estudiante + campaña activa
 │   │       ├── status.py           # Respuesta determinística de estado matrícula
 │   │       ├── platform.py         # Info de acceso a plataforma educativa
-│   │       ├── confirm.py          # Procesamiento de confirmación Sí/No
+│   │       ├── confirm.py          # Procesamiento de confirmación Sí/No (matrícula)
+│   │       ├── confirm_event.py    # Procesamiento Asisto/No Asisto (eventos) NUEVO
 │   │       ├── quick_response.py   # Respuestas pre-definidas (0 tokens IA)
 │   │       └── fallback.py         # Gemini FAQ para consultas no cubiertas
 │   │
@@ -156,10 +162,11 @@ Agent_T_T/
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │                    GRAFO LANGGRAPH                                  │    │
 │  │                                                                     │    │
-│  │  load_context ──► router_gemini ──►┬── confirm_response ──► END    │    │
-│  │       │                            ├── check_status ──────► END    │    │
-│  │  (Busca datos    (Clasifica        ├── platform_access ───► END    │    │
-│  │   en Turso)       intención)       ├── quick_response ────► END    │    │
+│  │  load_context ──► router_gemini ──►┬── confirm_event ─────► END    │    │
+│  │       │                            ├── confirm_response ──► END    │    │
+│  │  (Busca datos    (Clasifica        ├── check_status ──────► END    │    │
+│  │   en Turso +      intención)       ├── platform_access ───► END    │    │
+│  │   campaña activa)                  ├── quick_response ────► END    │    │
 │  │                                    └── general_response ──► END    │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                                                             │
@@ -203,8 +210,14 @@ FLUJO 1: MENSAJE ENTRANTE DE WHATSAPP (MODO IA)
 4. Grafo LangGraph ejecuta:
    a. load_context_node: busca estudiante por teléfono en Turso
       → Setea student_name y student_data en state
+      → Busca campaña activa: db_handler.get_campana_activa_for_student()
+      → Setea active_campaign en state (o None si no hay)
    
    b. router (clasificación de intención):
+      PRIORIDAD 0 - Campaña activa (NUEVO):
+        Si active_campaign existe con campana_tipo='EVENTO' y sin respuesta → CONFIRM_EVENT
+        (Futuro: otros tipos de campaña aquí)
+      
       PRIORIDAD 1 - Confirmación estricta:
         Si estado_envio='sent' Y respuesta='default' → CONFIRM
       
@@ -228,6 +241,8 @@ FLUJO 1: MENSAJE ENTRANTE DE WHATSAPP (MODO IA)
         Gemini responde → se limpia a STATUS/ACCESS/GENERAL
    
    c. decide_next_node: enruta al nodo correspondiente
+      CONFIRM_EVENT → confirm_event (campañas de evento)
+      CONFIRM → confirm_response (matrícula)
    
    d. Nodo ejecuta y retorna AIMessage con respuesta
 
@@ -248,6 +263,29 @@ Condición: estado_envio='sent' AND respuesta IN ('default', '', NULL)
    c. Si no matchea → pide "responde SÍ o NO"
    d. Verifica que no haya respondido antes
    e. Guarda en BD: db_handler.update_respuesta(phone, respuesta, fecha)
+   f. Responde con mensaje de confirmación o rechazo
+
+────────────────────────────────────────────────────────────────────────────────
+FLUJO 2.5: CONFIRMACIÓN DE ASISTENCIA A EVENTO (Asisto/No Asisto) [NUEVO]
+────────────────────────────────────────────────────────────────────────────────
+
+Condición: Existe campaña activa tipo EVENTO con envío hecho y sin respuesta
+           (detectada por get_campana_activa_for_student en load_context)
+
+1. load_context_node carga active_campaign desde campana_miembros
+2. Router detecta active_campaign con campana_tipo='EVENTO' sin respuesta
+   → intent=CONFIRM_EVENT (PRIORIDAD 0, antes que matrícula)
+3. confirm_event_node:
+   a. Valida que hay campaña activa
+   b. Verifica que no haya respondido antes (doble validación)
+   c. Detecta respuesta con patterns:
+      Asiste: ['asisto','asistiré','voy','iré','confirmo','sí','dale','ok','claro','acepto','cuenten conmigo']
+      No Asiste: ['no asisto','no asistiré','no voy','no puedo','no','rechazo','cancelar','paso','imposible']
+      → Primero verifica no_asiste (más específicos) para evitar false positive con "no"
+   d. Si no matchea → pide "responde Asisto o No Asisto"
+   e. Guarda en campana_miembros: db_handler.update_miembro_respuesta(miembro_id, respuesta, raw_text)
+   f. NO TOCA tabla estudiantes (diseño crítico: evento ≠ matrícula)
+   g. Responde con confirmación positiva o registro de no asistencia
    f. Responde con mensaje de confirmación o rechazo
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -409,6 +447,20 @@ POST /api/google/upload             → Procesar archivo de Drive
      Body: {fileId, accessToken}
 POST /api/sync/drive-manual         → Forzar sincronización manual
 
+────────────── CAMPAÑAS (NUEVO) ──────────────
+POST /api/campaigns                 → Crear campaña
+     Body: {nombre, tipo (MATRICULA|EVENTO|INFO), plantilla_whatsapp?, bootcamp_objetivo_id?}
+GET  /api/campaigns                 → Listar todas las campañas
+GET  /api/campaigns/<id>            → Obtener campaña con estadísticas
+POST /api/campaigns/<id>/members    → Agregar miembros
+     Body opción 1: {estudiante_ids: [1,2,3]}
+     Body opción 2: {bootcamp_id: "IA_2024_01"}
+     Body opción 3: {all_opt_in: true}
+POST /api/campaigns/<id>/send       → Enviar campaña a pendientes
+     Body: {language_code?: "es", has_header_param?: false}
+GET  /api/campaigns/<id>/stats      → Estadísticas detalladas
+DELETE /api/campaigns/<id>          → Eliminar campaña + miembros
+
 
 ================================================================================
 6. BASE DE DATOS - ESQUEMA COMPLETO
@@ -446,6 +498,34 @@ idx_estudiantes_bootcamp    ON estudiantes(bootcamp_id)
 idx_estudiantes_fecha_envio ON estudiantes(fecha_envio)
 idx_estudiantes_respuesta   ON estudiantes(respuesta)
 
+──── Tabla: campanas (NUEVA) ────
+id INTEGER PRIMARY KEY AUTOINCREMENT
+nombre TEXT NOT NULL                → "Evento Inauguración Quindío"
+tipo TEXT NOT NULL                  → "MATRICULA" / "EVENTO" / "INFO"
+bootcamp_objetivo_id TEXT           → Filtro opcional por bootcamp
+plantilla_whatsapp TEXT             → Nombre del template en Meta
+estado TEXT DEFAULT 'DRAFT'         → "DRAFT" / "SENDING" / "COMPLETED"
+fecha_creacion TIMESTAMP            → Auto
+
+──── Tabla: campana_miembros (NUEVA) ────
+id INTEGER PRIMARY KEY AUTOINCREMENT
+campana_id INTEGER NOT NULL         → FK a campanas(id)
+estudiante_id INTEGER NOT NULL      → FK a estudiantes(id)
+variables_contexto TEXT             → JSON con parámetros de template
+estado_envio TEXT DEFAULT 'pending' → "pending" / "sent" / "error"
+message_id TEXT                     → wamid.xxx (ID mensaje WhatsApp)
+respuesta_usuario TEXT              → "ASISTE" / "NO_ASISTE" / NULL
+mensaje_respuesta_raw TEXT          → Texto literal de la respuesta
+fecha_envio TIMESTAMP               → ISO timestamp del envío
+fecha_respuesta TIMESTAMP           → ISO timestamp de la respuesta
+
+──── Índices de campañas ────
+idx_campanas_tipo               ON campanas(tipo)
+idx_campanas_estado             ON campanas(estado)
+idx_campana_miembros_campana    ON campana_miembros(campana_id)
+idx_campana_miembros_estudiante ON campana_miembros(estudiante_id)
+idx_campana_miembros_envio      ON campana_miembros(estado_envio)
+
 ──── Lógica de Turso ────
 - Producción: HTTP API a Turso (libSQL cloud)
   URL: libsql://whatsapp-tracking-*.turso.io
@@ -465,10 +545,12 @@ create_app()                        → Factory Flask: inicia servicios, bluepri
 
 ──── app/agent/graph.py ────
 router(state) → {"intent": str}     → Clasifica intención del mensaje
+  - Prioridad 0: campaña activa (EVENTO → CONFIRM_EVENT) [NUEVO]
   - Prioridad 1: confirmación estricta (estado_envio=sent + respuesta=default)
   - Prioridad 2: fast-path por keywords (~18 categorías)
   - Prioridad 3: Gemini (prompt clasificador → STATUS/ACCESS/GENERAL)
 decide_next_node(state) → str       → Mapea intent a nombre de nodo
+  CONFIRM_EVENT → confirm_event [NUEVO]
 build_agent_graph() → CompiledGraph → Construye el grafo LangGraph
 get_agent() → CompiledGraph         → Singleton del agente compilado
 
@@ -479,11 +561,13 @@ AgentState(TypedDict)               → Estado del grafo:
   student_name: Optional[str]       → Nombre del estudiante
   student_data: Optional[dict]      → Datos completos del estudiante
   intent: Optional[str]             → Intención clasificada
+  active_campaign: Optional[dict]   → Campaña activa pendiente de respuesta (NUEVO)
 
 ──── app/agent/nodes/load_context.py ────
 load_context_node(state)            → Busca estudiante en BD por teléfono
   Input: state['phone']
-  Output: {student_name, student_data}
+  Output: {student_name, student_data, active_campaign}
+  Además busca campaña activa: db_handler.get_campana_activa_for_student()
 
 ──── app/agent/nodes/status.py ────
 check_status_node(state)            → Respuesta determinística de estado
@@ -500,11 +584,21 @@ platform_access_node(state)         → Info de acceso a plataforma
   NO USA IA
 
 ──── app/agent/nodes/confirm.py ────
-confirm_response_node(state)        → Procesa Sí/No y guarda en BD
+confirm_response_node(state)        → Procesa Sí/No y guarda en BD (MATRÍCULA)
   Patterns Sí: sí, si, yes, acepto, confirmo, ok, dale, claro, listo
   Patterns No: no, rechazo, cancelar, cancela, rechazar
   Guarda: db_handler.update_respuesta(phone, respuesta, fecha)
   Verifica doble respuesta
+  NO USA IA
+
+──── app/agent/nodes/confirm_event.py (NUEVO) ────
+confirm_event_node(state)           → Procesa Asisto/No Asisto (EVENTOS)
+  Patterns Asiste: asisto, asistiré, voy, iré, confirmo, sí, dale, ok, claro, acepto
+  Patterns No Asiste: no asisto, no voy, no puedo, no, paso, cancelar, imposible
+  Prioridad: no_asiste_patterns primero (más específicos)
+  Guarda: db_handler.update_miembro_respuesta(miembro_id, respuesta, raw_text)
+  NO toca tabla estudiantes (solo campana_miembros)
+  Verifica doble respuesta y campaña activa
   NO USA IA
 
 ──── app/agent/nodes/quick_response.py ────
@@ -555,6 +649,23 @@ upload_from_google()                → Procesa archivo Drive → BD
   Pipeline: metadata → download → parse → normalize → validate → insert → sync
 sync_drive_manual()                 → Fuerza sync manual
 
+──── app/controllers/campaign_controller.py (NUEVO) ────
+create_campaign()                   → POST /api/campaigns: crea campaña
+  Recibe: nombre, tipo (MATRICULA/EVENTO/INFO), plantilla_whatsapp
+list_campaigns()                    → GET /api/campaigns: lista todas
+get_campaign(campana_id)            → GET /api/campaigns/<id>: con stats
+add_members(campana_id)             → POST /api/campaigns/<id>/members
+  3 modos: por IDs, por bootcamp_id, o all_opt_in=true
+send_campaign(campana_id)           → POST /api/campaigns/<id>/send
+  Loop: pendientes → template → update estado → delay entre envíos
+  Usa _build_template_params() para construir parámetros de plantilla
+campaign_stats(campana_id)          → GET /api/campaigns/<id>/stats
+delete_campaign(campana_id)         → DELETE /api/campaigns/<id>
+_build_template_params(miembro, tipo) → Helper: construye params para WhatsApp
+  MATRICULA: nombre, modalidad, bootcamp, inglés, formación, horario, lugar
+  EVENTO: solo nombre (datos del evento están en la plantilla)
+  INFO: solo nombre
+
 ──── app/controllers/system_controller.py ────
 index()                             → Info API
 health_check()                      → Health check
@@ -587,6 +698,20 @@ delete_bootcamp()                   → DELETE bootcamp
 clear_all_estudiantes()             → DELETE FROM estudiantes (con lock)
 clear_all_bootcamps()               → DELETE FROM bootcamps (con lock)
 reset_database()                    → Borra estudiantes + bootcamps
+# ── Campañas (NUEVO) ──
+insert_campana()                    → INSERT INTO campanas (nombre, tipo, etc.)
+get_campana_by_id()                 → SELECT campaña por ID
+get_all_campanas()                  → SELECT todas las campañas
+update_campana_estado()             → UPDATE estado (DRAFT/SENDING/COMPLETED)
+insert_campana_miembros()           → INSERT batch miembros en campana_miembros
+get_miembros_pendientes_envio()     → JOIN campana_miembros + estudiantes (pending)
+update_miembro_estado_envio()       → UPDATE estado_envio + message_id
+update_miembro_respuesta()          → UPDATE respuesta + raw + fecha
+get_campana_activa_for_student()    → SELECT campaña activa (sin respuesta) para estudiante
+  Busca en campana_miembros JOIN campanas WHERE sent AND sin respuesta
+  Retorna la más reciente si hay varias
+get_campana_stats()                 → COUNT por estado + respuestas_detalle
+delete_campana()                    → DELETE cascada: miembros + campaña
 
 ──── app/services/whatsapp_service.py ────
 __init__()                          → Carga credenciales de .env
@@ -670,7 +795,8 @@ Se usa Google Gemini a través de langchain-google-genai:
 3. Nodos sin IA (0 tokens):
    - check_status_node: respuesta determinística
    - platform_access_node: respuesta determinística
-   - confirm_response_node: pattern matching
+   - confirm_response_node: pattern matching (matrícula Sí/No)
+   - confirm_event_node: pattern matching (evento Asisto/No Asisto) [NUEVO]
    - quick_response_node: strings pre-definidos
 
 
@@ -702,7 +828,7 @@ GOOGLE_API_KEY        → API key para Google Gemini (requerida por langchain)
 10. TESTS
 ================================================================================
 
-──── test_agent_optimizations.py (~25 tests) ────
+──── test_agent_optimizations.py (~63 tests) ────
 TestMessageDeduplicator:
   - test_first_message_not_duplicate
   - test_same_message_is_duplicate
@@ -710,8 +836,8 @@ TestMessageDeduplicator:
   - test_expired_message_not_duplicate
   - test_empty_message_id
   - test_none_message_id
+  - test_max_entries_eviction (LRU eviction con max_entries=3)
   - test_thread_safety (10 threads concurrentes)
-  - test_max_entries_eviction (LRU eviction)
 
 TestRouterFastPath:
   - test_status_keywords (estado, matrícula, inscripción, etc.)
@@ -741,6 +867,34 @@ TestGeminiLogger:
   - test_log_token_usage_with_metadata
   - test_log_token_usage_empty
   - test_invoke_with_logging
+
+TestRouterConfirmEvent (NUEVO):
+  - test_evento_campaign_routes_to_confirm_event
+  - test_evento_campaign_already_responded_skipped
+  - test_no_campaign_uses_normal_flow
+  - test_evento_campaign_priority_over_confirm
+
+TestDecideNextNodeConfirmEvent (NUEVO):
+  - test_route_to_confirm_event
+  - test_confirm_event_before_confirm
+
+TestConfirmEventNode (NUEVO):
+  - test_asisto_response
+  - test_no_asisto_response
+  - test_no_campaign_active
+  - test_already_responded
+  - test_unrecognized_response_asks_again
+  - test_si_variant_maps_to_asiste (5 variantes)
+  - test_no_variant_maps_to_no_asiste (4 variantes)
+
+TestCampaignController (NUEVO):
+  - test_create_campaign_success
+  - test_create_campaign_missing_fields
+  - test_list_campaigns
+  - test_get_campaign_not_found
+  - test_get_campaign_with_stats
+  - test_delete_campaign
+  - test_campaign_stats
 
 ──── test_controllers.py (~15 tests) ────
 TestSystemController:
@@ -859,6 +1013,15 @@ PUNTOS DE ATENCIÓN:
   Sin File I/O para máxima velocidad.
 - Webhook descarta mensajes con timestamp >5 min para evitar procesar
   reintentos antiguos de Meta
+- SISTEMA DE CAMPAÑAS (NUEVO):
+  * campanas + campana_miembros son tablas independientes de estudiantes
+  * Las respuestas de EVENTO se guardan en campana_miembros, NO en estudiantes
+  * Router asigna PRIORIDAD 0 a campañas activas (antes que matrícula)
+  * confirm_event_node verifica no_asiste_patterns ANTES de asiste_patterns
+    para evitar false positives con la palabra "no" sola
+  * Tipos soportados: MATRICULA, EVENTO, INFO (escalable para futuros tipos)
+  * API de campañas en /api/campaigns sin autenticación (mismo que otros endpoints)
+  * send_campaign usa DELAY_SECONDS entre envíos para rate limiting de Meta
 
 ================================================================================
 FIN DEL DOCUMENTO
