@@ -296,7 +296,7 @@ def _build_template_params(miembro: dict, tipo_campana: str) -> list:
             str(miembro.get('modalidad', '')),
             str(miembro.get('bootcamp_nombre', '')),
             str(miembro.get('fecha_inicio_ingles', '')),
-            '',  # ingles_fin deprecated
+            str(miembro.get('fecha_fin_ingles', '')),
             str(miembro.get('fecha_inicio_tecnica', '')),
             str(miembro.get('horario', '')),
             str(miembro.get('lugar', ''))

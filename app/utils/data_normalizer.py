@@ -100,15 +100,14 @@ def add_tracking_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Añade columnas auxiliares al DataFrame si no existen.
     
-    En el esquema normalizado v3, el tracking de envíos vive en
-    campana_miembros, no en estudiantes.  Aquí solo se garantizan
-    columnas base que pueden no venir del Excel.
+    En el esquema normalizado v3, los campos de tracking (opt_in,
+    estado_academico, estado_envio, etc.) son manejados por el
+    sistema automáticamente.  Aquí solo se garantizan columnas
+    de datos del usuario que pueden no venir del Excel.
     
     Columnas añadidas:
-    - opt_in: Consentimiento WhatsApp (0/1)
-    - estado_academico: INSCRITO por defecto
-    - documento: Número de documento
-    - email: Email del estudiante
+    - documento: Número de documento (opcional del usuario)
+    - email: Email del estudiante (opcional del usuario)
     
     Args:
         df: DataFrame original
@@ -117,8 +116,6 @@ def add_tracking_columns(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame: DataFrame con columnas auxiliares
     """
     aux_cols = {
-        'opt_in': '0',
-        'estado_academico': 'INSCRITO',
         'documento': '',
         'email': ''
     }

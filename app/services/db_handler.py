@@ -222,6 +222,7 @@ class DatabaseHandler:
                 horario TEXT,
                 lugar TEXT,
                 fecha_inicio_ingles TEXT,
+                fecha_fin_ingles TEXT,
                 fecha_inicio_tecnica TEXT,
                 fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''',
@@ -281,14 +282,29 @@ class DatabaseHandler:
             'CREATE INDEX IF NOT EXISTS idx_cm_estado ON campana_miembros(estado_envio)',
         ]
 
+        # Migraciones: agregar columnas nuevas a tablas existentes
+        migrations = [
+            "ALTER TABLE bootcamps ADD COLUMN fecha_fin_ingles TEXT",
+        ]
+
         if self.use_turso:
             for query in queries:
                 self._execute_turso_query(query)
+            for migration in migrations:
+                try:
+                    self._execute_turso_query(migration)
+                except Exception:
+                    pass  # Columna ya existe
         else:
             conn = self._get_connection()
             cursor = conn.cursor()
             for query in queries:
                 cursor.execute(query)
+            for migration in migrations:
+                try:
+                    cursor.execute(migration)
+                except Exception:
+                    pass  # Columna ya existe
             conn.commit()
             conn.close()
 
@@ -299,6 +315,7 @@ class DatabaseHandler:
     def insert_or_update_bootcamp(self, codigo: str, nombre: str,
                                    modalidad: str = None, horario: str = None,
                                    lugar: str = None, fecha_inicio_ingles: str = None,
+                                   fecha_fin_ingles: str = None,
                                    fecha_inicio_tecnica: str = None) -> Tuple[bool, str]:
         """
         Inserta o actualiza un bootcamp.
@@ -310,6 +327,7 @@ class DatabaseHandler:
             horario: Ej: "L-V 6pm-10pm"
             lugar: Sede / URL
             fecha_inicio_ingles: Fecha inicio inglés
+            fecha_fin_ingles: Fecha fin inglés
             fecha_inicio_tecnica: Fecha inicio formación técnica
         """
         if not codigo or not nombre:
@@ -318,8 +336,8 @@ class DatabaseHandler:
         try:
             query = '''
                 INSERT INTO bootcamps (codigo, nombre, modalidad, horario, lugar,
-                                       fecha_inicio_ingles, fecha_inicio_tecnica)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                       fecha_inicio_ingles, fecha_fin_ingles, fecha_inicio_tecnica)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(codigo)
                 DO UPDATE SET
                     nombre = excluded.nombre,
@@ -327,11 +345,12 @@ class DatabaseHandler:
                     horario = COALESCE(NULLIF(excluded.horario, ''), bootcamps.horario),
                     lugar = COALESCE(NULLIF(excluded.lugar, ''), bootcamps.lugar),
                     fecha_inicio_ingles = COALESCE(NULLIF(excluded.fecha_inicio_ingles, ''), bootcamps.fecha_inicio_ingles),
+                    fecha_fin_ingles = COALESCE(NULLIF(excluded.fecha_fin_ingles, ''), bootcamps.fecha_fin_ingles),
                     fecha_inicio_tecnica = COALESCE(NULLIF(excluded.fecha_inicio_tecnica, ''), bootcamps.fecha_inicio_tecnica)
             '''
             self._execute_query(query, (
                 codigo, nombre, modalidad or '', horario or '', lugar or '',
-                fecha_inicio_ingles or '', fecha_inicio_tecnica or ''
+                fecha_inicio_ingles or '', fecha_fin_ingles or '', fecha_inicio_tecnica or ''
             ))
             return True, f"Bootcamp {codigo} registrado"
         except Exception as e:
@@ -462,7 +481,7 @@ class DatabaseHandler:
             query = '''
                 SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
                        b.modalidad, b.horario, b.lugar,
-                       b.fecha_inicio_ingles, b.fecha_inicio_tecnica
+                       b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                 FROM estudiantes e
                 LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
                 WHERE REPLACE(REPLACE(REPLACE(e.telefono_e164, '+', ''), ' ', ''), '-', '') = ?
@@ -484,7 +503,8 @@ class DatabaseHandler:
                 bid = int(bootcamp_id)
                 query = '''
                     SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
-                           b.modalidad, b.horario, b.lugar
+                           b.modalidad, b.horario, b.lugar,
+                           b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                     FROM estudiantes e
                     LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
                     WHERE e.bootcamp_id = ?
@@ -494,7 +514,8 @@ class DatabaseHandler:
             except (ValueError, TypeError):
                 query = '''
                     SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
-                           b.modalidad, b.horario, b.lugar
+                           b.modalidad, b.horario, b.lugar,
+                           b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                     FROM estudiantes e
                     JOIN bootcamps b ON e.bootcamp_id = b.id
                     WHERE b.codigo = ?
@@ -511,7 +532,7 @@ class DatabaseHandler:
             query = '''
                 SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
                        b.modalidad, b.horario, b.lugar,
-                       b.fecha_inicio_ingles, b.fecha_inicio_tecnica
+                       b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                 FROM estudiantes e
                 LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
                 WHERE e.opt_in = 1
@@ -535,7 +556,8 @@ class DatabaseHandler:
 
             query = '''
                 SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
-                       b.modalidad, b.horario, b.lugar
+                       b.modalidad, b.horario, b.lugar,
+                       b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                 FROM estudiantes e
                 LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
                 ORDER BY e.fecha_creacion DESC
@@ -924,7 +946,7 @@ class DatabaseHandler:
                        e.telefono_e164, e.nombre, e.documento,
                        b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
                        b.modalidad, b.horario, b.lugar,
-                       b.fecha_inicio_ingles, b.fecha_inicio_tecnica
+                       b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                 FROM campana_miembros cm
                 JOIN estudiantes e ON cm.estudiante_id = e.id
                 LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
