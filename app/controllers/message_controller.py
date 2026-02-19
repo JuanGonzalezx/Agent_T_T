@@ -63,9 +63,10 @@ def send_batch_messages():
         campana_id (int, optional): Usar campaña existente (se traen datos de ella)
         campana_nombre (str, optional): Nombre para nueva campaña
         plantilla_whatsapp (str, optional): Override del template de Meta
-        language_code (str, optional): Código de idioma (default: es)
         skip_already_sent (bool, optional): Omitir estudiantes ya enviados en
             otra campaña del mismo tipo (default: true)
+    
+    Nota: language_code se resuelve automáticamente según TEMPLATE_DEFAULTS.
 
     Flujo:
         1. Determina plantilla según tipo o override
@@ -79,15 +80,16 @@ def send_batch_messages():
         campana_id = data.get('campana_id')
         campana_nombre = data.get('campana_nombre')
         plantilla_override = data.get('plantilla_whatsapp')
-        language_override = data.get('language_code')
         skip_already_sent = data.get('skip_already_sent', True)
 
         # ─── 1. Resolver plantilla y language_code según tipo ───
+        # El language_code SIEMPRE se toma de TEMPLATE_DEFAULTS porque
+        # debe coincidir con el idioma registrado en Meta para la plantilla.
         defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'})
         template_name = plantilla_override or defaults['plantilla']
-        language_code = language_override or defaults['language']
+        language_code = defaults['language']
 
-        current_app.logger.info(f"[BATCH] Tipo={tipo}, template={template_name}, campana_id={campana_id}")
+        current_app.logger.info(f"[BATCH] Tipo={tipo}, template={template_name}, lang={language_code}, campana_id={campana_id}")
 
         # ─── 2. Resolver / crear campaña ───
         if campana_id:
