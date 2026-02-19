@@ -189,7 +189,10 @@ def send_campaign(campana_id):
             return jsonify({'success': False, 'error': 'Campaña sin plantilla configurada'}), 400
         
         data = request.get_json() or {}
-        language_code = data.get('language_code', 'es')
+        # Resolver language_code según tipo de campaña
+        tipo = campana.get('tipo', 'MATRICULA').upper()
+        default_lang = TEMPLATE_DEFAULTS.get(tipo, {}).get('language', 'es')
+        language_code = data.get('language_code') or default_lang
         has_header_param = data.get('has_header_param', False)
         
         # Obtener miembros pendientes
