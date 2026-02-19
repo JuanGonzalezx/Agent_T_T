@@ -177,6 +177,35 @@ class DatabaseHandler:
                 raise
         return None
 
+    def _execute_insert(self, query: str, params: tuple = None) -> int:
+        """
+        Ejecuta un INSERT y retorna el last_insert_rowid.
+
+        Para Turso: extrae 'last_insert_rowid' del response JSON.
+        Para SQLite: usa cursor.lastrowid.
+        """
+        if self.use_turso:
+            result = self._execute_turso_query(query, params)
+            # Verificar error en respuesta Turso
+            if result.get('type') == 'error':
+                error_msg = result.get('error', {}).get('message', 'Unknown Turso error')
+                raise Exception(f"Turso INSERT error: {error_msg}")
+            last_id = result.get('response', {}).get('result', {}).get('last_insert_rowid')
+            if last_id is not None:
+                return int(last_id) if isinstance(last_id, (str, int)) else 0
+            return 0
+        else:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            conn.commit()
+            last_id = cursor.lastrowid
+            conn.close()
+            return last_id or 0
+
     # =================================================================
     # INICIALIZACIÓN DEL ESQUEMA (v3 – normalizado)
     # =================================================================
@@ -825,15 +854,23 @@ class DatabaseHandler:
         if tipo not in ('MATRICULA', 'EVENTO', 'INFO'):
             return False, f"Tipo inválido: {tipo}. Debe ser MATRICULA, EVENTO o INFO"
 
+        # Sanitizar bootcamp_objetivo_id: debe ser int > 0 o None
+        if bootcamp_objetivo_id is not None and bootcamp_objetivo_id != '':
+            try:
+                bootcamp_objetivo_id = int(bootcamp_objetivo_id)
+                if bootcamp_objetivo_id <= 0:
+                    bootcamp_objetivo_id = None
+            except (ValueError, TypeError):
+                bootcamp_objetivo_id = None
+        else:
+            bootcamp_objetivo_id = None
+
         try:
             query = '''
                 INSERT INTO campanas (nombre, tipo, plantilla_whatsapp, bootcamp_objetivo_id, estado)
                 VALUES (?, ?, ?, ?, 'DRAFT')
             '''
-            self._execute_query(query, (nombre, tipo, plantilla_whatsapp or '', bootcamp_objetivo_id))
-
-            result = self._execute_query("SELECT MAX(id) as last_id FROM campanas", fetch_one=True)
-            campana_id = int(result['last_id']) if result and result.get('last_id') else 0
+            campana_id = self._execute_insert(query, (nombre, tipo, plantilla_whatsapp or '', bootcamp_objetivo_id))
             return True, campana_id
         except Exception as e:
             return False, f"Error creando campaña: {str(e)}"

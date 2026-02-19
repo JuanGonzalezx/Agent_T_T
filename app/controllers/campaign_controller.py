@@ -34,11 +34,20 @@ def create_campaign():
         if not nombre or not tipo:
             return jsonify({'success': False, 'error': 'nombre y tipo son requeridos'}), 400
         
+        # Sanitizar bootcamp_objetivo_id: convertir a int o None
+        raw_bootcamp_id = data.get('bootcamp_objetivo_id')
+        bootcamp_objetivo_id = None
+        if raw_bootcamp_id not in (None, '', 0, '0'):
+            try:
+                bootcamp_objetivo_id = int(raw_bootcamp_id)
+            except (ValueError, TypeError):
+                bootcamp_objetivo_id = None
+
         success, result = db_handler.insert_campana(
             nombre=nombre,
             tipo=tipo,
             plantilla_whatsapp=data.get('plantilla_whatsapp', ''),
-            bootcamp_objetivo_id=data.get('bootcamp_objetivo_id', '')
+            bootcamp_objetivo_id=bootcamp_objetivo_id
         )
         
         if success:
