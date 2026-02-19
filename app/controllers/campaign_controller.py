@@ -101,8 +101,8 @@ def add_members(campana_id):
     Body JSON opción 2 (por bootcamp):
         bootcamp_id (str): Agrega todos los estudiantes de este bootcamp
         
-    Body JSON opción 3 (todos los estudiantes con opt_in):
-        all_opt_in (bool): True para agregar todos con opt_in=TRUE
+    Body JSON opción 3 (todos los estudiantes):
+        all_opt_in (bool): True para agregar todos los estudiantes
     """
     try:
         campana = db_handler.get_campana_by_id(campana_id)
@@ -124,7 +124,7 @@ def add_members(campana_id):
             estudiante_ids = [int(e['id']) for e in estudiantes if e.get('id')]
             
         elif data.get('all_opt_in'):
-            # Opción 3: Todos con opt_in
+            # Opción 3: Todos los estudiantes
             estudiantes = db_handler.get_estudiantes_pendientes_envio()
             estudiante_ids = [int(e['id']) for e in estudiantes if e.get('id')]
         else:

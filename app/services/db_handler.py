@@ -235,7 +235,7 @@ class DatabaseHandler:
                 documento TEXT,
                 email TEXT,
                 bootcamp_id INTEGER,
-                opt_in INTEGER DEFAULT 0,
+                opt_in INTEGER DEFAULT 1,
                 estado_academico TEXT DEFAULT 'INSCRITO',
                 fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(bootcamp_id) REFERENCES bootcamps(id)
@@ -436,7 +436,7 @@ class DatabaseHandler:
         documento = estudiante_data.get('documento') or ''
         email = estudiante_data.get('email') or ''
         bootcamp_id = estudiante_data.get('bootcamp_id')  # INTEGER FK or None
-        opt_in = 1 if str(estudiante_data.get('opt_in', '0')).upper() in ('1', 'TRUE', 'SI', 'YES') else 0
+        opt_in = 1  # Todos los estudiantes subidos se consideran contactables
         estado_academico = estudiante_data.get('estado_academico') or 'INSCRITO'
 
         # bootcamp_id puede ser None/empty
@@ -460,7 +460,7 @@ class DatabaseHandler:
                     documento = CASE WHEN excluded.documento != '' THEN excluded.documento ELSE estudiantes.documento END,
                     email = CASE WHEN excluded.email != '' THEN excluded.email ELSE estudiantes.email END,
                     bootcamp_id = COALESCE(excluded.bootcamp_id, estudiantes.bootcamp_id),
-                    opt_in = CASE WHEN excluded.opt_in = 1 THEN 1 ELSE estudiantes.opt_in END,
+                    opt_in = 1,
                     estado_academico = CASE
                         WHEN excluded.estado_academico != 'INSCRITO' THEN excluded.estado_academico
                         ELSE estudiantes.estado_academico
@@ -527,7 +527,7 @@ class DatabaseHandler:
             return []
 
     def get_estudiantes_opt_in(self) -> List[Dict[str, Any]]:
-        """Obtiene estudiantes con opt_in activo (consentimiento WhatsApp)."""
+        """Obtiene todos los estudiantes (opt_in ya no filtra)."""
         try:
             query = '''
                 SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
@@ -535,12 +535,11 @@ class DatabaseHandler:
                        b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
                 FROM estudiantes e
                 LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
-                WHERE e.opt_in = 1
                 ORDER BY e.id ASC
             '''
             return self._execute_query(query, fetch_all=True) or []
         except Exception as e:
-            print(f"Error obteniendo estudiantes opt_in: {str(e)}")
+            print(f"Error obteniendo estudiantes: {str(e)}")
             return []
 
     # Alias para compatibilidad con código existente
@@ -709,7 +708,7 @@ class DatabaseHandler:
                 if count > 0:
                     self._execute_query('''
                         UPDATE estudiantes
-                        SET estado_academico = ?, opt_in = 1
+                        SET estado_academico = ?
                         WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
                           AND estado_academico = 'INSCRITO'
                     ''', (nuevo_estado, telefono_clean))
@@ -722,7 +721,7 @@ class DatabaseHandler:
                     cursor = conn.cursor()
                     cursor.execute('''
                         UPDATE estudiantes
-                        SET estado_academico = ?, opt_in = 1
+                        SET estado_academico = ?
                         WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
                           AND estado_academico = 'INSCRITO'
                     ''', (nuevo_estado, telefono_clean))
@@ -748,7 +747,7 @@ class DatabaseHandler:
         """Actualiza un campo específico de un estudiante."""
         allowed_fields = [
             'nombre', 'documento', 'email', 'bootcamp_id',
-            'opt_in', 'estado_academico'
+            'estado_academico'
         ]
 
         if field not in allowed_fields:
@@ -788,7 +787,7 @@ class DatabaseHandler:
         """Actualiza múltiples campos de un estudiante."""
         allowed_fields = [
             'nombre', 'documento', 'email', 'bootcamp_id',
-            'opt_in', 'estado_academico'
+            'estado_academico'
         ]
 
         invalid_fields = [f for f in fields.keys() if f not in allowed_fields]
