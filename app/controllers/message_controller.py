@@ -7,9 +7,9 @@ message_bp = Blueprint('messages', __name__)
 
 # ─── Plantillas por defecto según tipo de campaña ───
 TEMPLATE_DEFAULTS = {
-    'MATRICULA': 'prueba_matricula',
-    'EVENTO': 'confirmacion_evento_quindio',
-    'INFO': 'confirmacion_evento_quindio',
+    'MATRICULA': {'plantilla': 'prueba_matricula', 'language': 'es'},
+    'EVENTO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
+    'INFO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
 }
 
 @message_bp.route('/send-simple', methods=['POST'])
@@ -79,11 +79,13 @@ def send_batch_messages():
         campana_id = data.get('campana_id')
         campana_nombre = data.get('campana_nombre')
         plantilla_override = data.get('plantilla_whatsapp')
-        language_code = data.get('language_code', 'es')
+        language_override = data.get('language_code')
         skip_already_sent = data.get('skip_already_sent', True)
 
-        # ─── 1. Resolver plantilla ───
-        template_name = plantilla_override or TEMPLATE_DEFAULTS.get(tipo, 'confirmacion_evento_quindio')
+        # ─── 1. Resolver plantilla y language_code según tipo ───
+        defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'})
+        template_name = plantilla_override or defaults['plantilla']
+        language_code = language_override or defaults['language']
 
         current_app.logger.info(f"[BATCH] Tipo={tipo}, template={template_name}, campana_id={campana_id}")
 

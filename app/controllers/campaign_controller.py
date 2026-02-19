@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 
 # ─── Plantillas por defecto según tipo de campaña ───
 TEMPLATE_DEFAULTS = {
-    'MATRICULA': 'prueba_matricula',
-    'EVENTO': 'confirmacion_evento_quindio',
-    'INFO': 'confirmacion_evento_quindio',
+    'MATRICULA': {'plantilla': 'prueba_matricula', 'language': 'es'},
+    'EVENTO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
+    'INFO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
 }
 
 
@@ -29,9 +29,9 @@ def get_templates():
     El frontend lo usa para preseleccionar la plantilla al elegir tipo.
     """
     tipos = [
-        {'tipo': 'MATRICULA', 'plantilla': TEMPLATE_DEFAULTS['MATRICULA'], 'descripcion': 'Confirmación de matrícula'},
-        {'tipo': 'EVENTO', 'plantilla': TEMPLATE_DEFAULTS['EVENTO'], 'descripcion': 'Confirmación de evento'},
-        {'tipo': 'INFO', 'plantilla': TEMPLATE_DEFAULTS['INFO'], 'descripcion': 'Mensaje informativo'},
+        {'tipo': 'MATRICULA', 'plantilla': TEMPLATE_DEFAULTS['MATRICULA']['plantilla'], 'language': TEMPLATE_DEFAULTS['MATRICULA']['language'], 'descripcion': 'Confirmación de matrícula'},
+        {'tipo': 'EVENTO', 'plantilla': TEMPLATE_DEFAULTS['EVENTO']['plantilla'], 'language': TEMPLATE_DEFAULTS['EVENTO']['language'], 'descripcion': 'Confirmación de evento'},
+        {'tipo': 'INFO', 'plantilla': TEMPLATE_DEFAULTS['INFO']['plantilla'], 'language': TEMPLATE_DEFAULTS['INFO']['language'], 'descripcion': 'Mensaje informativo'},
     ]
     return jsonify({'success': True, 'templates': tipos}), 200
 
