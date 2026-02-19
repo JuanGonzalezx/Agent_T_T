@@ -48,10 +48,11 @@ def confirm_response_node(state: AgentState):
         msg = "No encontré tu registro. 🧐 ¿Te inscribiste con este número?"
         return {"messages": [AIMessage(content=msg)]}
     
-    # Verificar si ya respondió (doble validación por seguridad)
-    respuesta_actual = data.get('respuesta', '')
-    if respuesta_actual and respuesta_actual.strip() != '' and respuesta_actual.strip().lower() != 'default':
-        msg = f"Ya registramos tu respuesta anterior: *{respuesta_actual}*. Si necesitas cambiarla, contacta a soporte."
+    # Verificar si ya respondió (doble validación por estado_academico)
+    estado_academico = str(data.get('estado_academico', 'INSCRITO')).upper()
+    if estado_academico in ('MATRICULADO', 'RECHAZADO', 'GRADUADO'):
+        estado_msg = {'MATRICULADO': 'Confirmado (Sí)', 'RECHAZADO': 'Rechazado (No)', 'GRADUADO': 'Graduado'}
+        msg = f"Ya registramos tu respuesta anterior: *{estado_msg.get(estado_academico, estado_academico)}*. Si necesitas cambiarla, contacta a soporte."
         return {"messages": [AIMessage(content=msg)]}
     
     # Guardar respuesta
@@ -60,7 +61,7 @@ def confirm_response_node(state: AgentState):
         success, message = db_handler.update_respuesta(phone, respuesta, fecha)
         
         bootcamp = data.get('bootcamp_nombre', 'el bootcamp') if data else 'el bootcamp'
-        inicio = data.get('inicio_formacion', '') if data else ''
+        inicio = data.get('fecha_inicio_tecnica', '') if data else ''
         
         if success:
             if respuesta == 'Sí':

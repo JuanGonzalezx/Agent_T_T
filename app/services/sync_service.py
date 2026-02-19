@@ -56,8 +56,8 @@ class SyncService:
 
         logger.info("🔄 Ejecutando sincronización automática con Drive...")
         try:
-            # Obtener datos desde Turso
-            estudiantes = self.db.get_all_estudiantes()
+            # Obtener datos desde Turso (get_all_estudiantes retorna (lista, total))
+            estudiantes, total = self.db.get_all_estudiantes(limit=10000)
             if not estudiantes:
                 logger.warning("[SYNC] No hay datos en Turso para sincronizar")
                 return

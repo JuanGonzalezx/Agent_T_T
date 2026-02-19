@@ -98,32 +98,34 @@ def clean_phone_numbers(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_tracking_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Añade columnas de tracking al DataFrame si no existen.
+    Añade columnas auxiliares al DataFrame si no existen.
     
-    Estas columnas permiten rastrear el estado de envíos y respuestas
-    de los contactos en campañas de mensajería.
+    En el esquema normalizado v3, el tracking de envíos vive en
+    campana_miembros, no en estudiantes.  Aquí solo se garantizan
+    columnas base que pueden no venir del Excel.
     
     Columnas añadidas:
-    - estado_envio: 'pending' o 'sent'
-    - fecha_envio: Timestamp del envío
-    - message_id: ID del mensaje de WhatsApp
-    - respuesta: Respuesta del contacto ("Sí" o "No")
-    - fecha_respuesta: Timestamp de la respuesta
+    - opt_in: Consentimiento WhatsApp (0/1)
+    - estado_academico: INSCRITO por defecto
+    - documento: Número de documento
+    - email: Email del estudiante
     
     Args:
         df: DataFrame original
         
     Returns:
-        DataFrame: DataFrame con columnas de tracking
+        DataFrame: DataFrame con columnas auxiliares
     """
-    tracking_cols = [
-        'estado_envio', 'fecha_envio', 'message_id',
-        'respuesta', 'fecha_respuesta'
-    ]
+    aux_cols = {
+        'opt_in': '0',
+        'estado_academico': 'INSCRITO',
+        'documento': '',
+        'email': ''
+    }
     
-    for col in tracking_cols:
+    for col, default in aux_cols.items():
         if col not in df.columns:
-            df[col] = ''
+            df[col] = default
     
     return df
 

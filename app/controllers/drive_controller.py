@@ -49,14 +49,38 @@ def upload_from_google():
         # Asumimos que tienes el loop de inserción aquí como en tu app.py original...
         # ... [INSERTAR CÓDIGO DE LOOP DE INSERCIÓN AQUÍ] ...
         # Para mantener el ejemplo funcional, invocamos lo básico:
-        bootcamp_ids = df['bootcamp_id'].dropna().unique()
+        # 5a. Crear/actualizar bootcamps con nuevo esquema normalizado
+        bootcamp_ids = df['bootcamp_id'].dropna().unique() if 'bootcamp_id' in df.columns else []
+        bootcamp_id_map = {}  # codigo -> id (integer FK)
         for bid in bootcamp_ids:
             row = df[df['bootcamp_id'] == bid].iloc[0]
-            db_handler.insert_or_update_bootcamp(bid, row.get('bootcamp_nombre', ''))
-            
+            db_handler.insert_or_update_bootcamp(
+                codigo=str(bid),
+                nombre=str(row.get('bootcamp_nombre', bid)),
+                modalidad=str(row.get('modalidad', '')),
+                horario=str(row.get('horario', '')),
+                lugar=str(row.get('lugar', '')),
+                fecha_inicio_ingles=str(row.get('ingles_inicio', row.get('fecha_inicio_ingles', ''))),
+                fecha_inicio_tecnica=str(row.get('inicio_formacion', row.get('fecha_inicio_tecnica', '')))
+            )
+            # Obtener el ID numérico del bootcamp recién creado
+            bc = db_handler.get_bootcamp_by_codigo(str(bid))
+            if bc:
+                bootcamp_id_map[str(bid)] = bc['id']
+
+        # 5b. Crear/actualizar estudiantes (esquema simplificado)
         for _, row in df.iterrows():
-            # Construye el diccionario estudiante_data completo aquí
-            estudiante_data = row.to_dict() # Simplificado, ajusta a tu modelo exacto
+            row_dict = row.to_dict()
+            bootcamp_codigo = str(row_dict.get('bootcamp_id', ''))
+            estudiante_data = {
+                'telefono_e164': row_dict.get('telefono_e164', ''),
+                'nombre': row_dict.get('nombre', ''),
+                'documento': row_dict.get('documento', ''),
+                'email': row_dict.get('email', ''),
+                'bootcamp_id': bootcamp_id_map.get(bootcamp_codigo),
+                'opt_in': row_dict.get('opt_in', 0),
+                'estado_academico': row_dict.get('estado_academico', 'INSCRITO')
+            }
             db_handler.insert_or_update_estudiante(estudiante_data)
 
         # 6. Actualizar Drive (Crear columnas nuevas)

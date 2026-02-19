@@ -62,25 +62,17 @@ def router(state: AgentState):
             if campana_tipo == 'EVENTO':
                 logger.info(f"[ROUTER] Campaña EVENTO activa → CONFIRM_EVENT")
                 return {"intent": "CONFIRM_EVENT"}
-            # Futuro: otros tipos de campaña aquí
+            if campana_tipo == 'MATRICULA':
+                logger.info(f"[ROUTER] Campaña MATRICULA activa → CONFIRM")
+                return {"intent": "CONFIRM"}
     
     # ==========================================================
-    # 🔒 REGLA DE ORO DEL FLUJO 1: Modo "Confirmación Estricta"
+    # 🔒 REGLA DE ORO: Modo "Confirmación" por estado académico
     # ==========================================================
     student_data = state.get('student_data')
     
     if student_data:
-        estado_envio = student_data.get('estado_envio', '')
-        respuesta_actual = student_data.get('respuesta', '')
-        
-        espera_confirmacion = (
-            estado_envio == 'sent' and 
-            (not respuesta_actual or respuesta_actual.strip() == '' or respuesta_actual.strip().lower() == 'default')
-        )
-        
-        if espera_confirmacion:
-            logger.info("[ROUTER] Estudiante en modo de confirmación estricta.")
-            return {"intent": "CONFIRM"}
+        estado_academico = str(student_data.get('estado_academico', 'INSCRITO')).upper()
             
     # ==========================================================
     # 🚀 ESCUDO ANTI-CUOTAS (FAST-PATH EXPANDIDO)

@@ -12,13 +12,11 @@ def platform_access_node(state: AgentState):
             "Si ya te inscribiste y no apareces, escríbenos a soporte@talentotech.gov.co"
         )
     else:
-        # Verificar si tiene acceso
-        respuesta = str(data.get('respuesta', '')).lower().strip()
-        confirmo = respuesta in ('sí', 'si', 'yes')
-        opt_in = str(data.get('opt_in', '')).upper() == 'TRUE'
-        matriculado = data.get('estado_envio') in ('matriculado', 'confirmado')
+        # Verificar si tiene acceso por estado académico
+        estado_academico = str(data.get('estado_academico', 'INSCRITO')).upper()
+        tiene_acceso = estado_academico in ('MATRICULADO', 'GRADUADO')
         
-        if opt_in or confirmo or matriculado:
+        if tiene_acceso:
             msg = (
                 f"¡Hola {name}! Aquí tienes los datos de acceso: 🔐\n\n"
                 "🔗 *Plataforma:*\n"

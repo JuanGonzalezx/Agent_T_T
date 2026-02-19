@@ -55,34 +55,54 @@ def send_batch_messages():
         
         current_app.logger.info(f"[BATCH] Iniciando envío masivo con template: {template_name}")
         
-        pending_students = db_handler.get_estudiantes_pendientes_envio()
+        # Obtener estudiantes con opt_in activo
+        opt_in_students = db_handler.get_estudiantes_opt_in()
         
-        current_app.logger.info(f"[BATCH] Estudiantes pendientes encontrados: {len(pending_students)}")
+        current_app.logger.info(f"[BATCH] Estudiantes opt_in encontrados: {len(opt_in_students)}")
         
-        if not pending_students:
+        if not opt_in_students:
             stats = db_handler.get_estadisticas()
-            current_app.logger.info(f"[BATCH] No hay pendientes. Stats: {stats}")
-            return jsonify({'success': True, 'message': 'No hay pendientes', 'stats': stats}), 200
+            current_app.logger.info(f"[BATCH] No hay estudiantes opt_in. Stats: {stats}")
+            return jsonify({'success': True, 'message': 'No hay estudiantes con opt_in', 'stats': stats}), 200
         
-        current_app.logger.info(f"[SEND] Batch iniciado - {len(pending_students)} pendientes")
+        # Crear campaña implícita de tipo MATRICULA
+        from datetime import datetime
+        campana_nombre = f"Matrícula Batch {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        success_c, campana_id = db_handler.insert_campana(
+            nombre=campana_nombre,
+            tipo='MATRICULA',
+            plantilla_whatsapp=template_name
+        )
+        
+        if not success_c:
+            return jsonify({'success': False, 'error': f'Error creando campaña: {campana_id}'}), 500
+        
+        # Agregar miembros
+        estudiante_ids = [int(s['id']) for s in opt_in_students if s.get('id')]
+        db_handler.insert_campana_miembros(campana_id, estudiante_ids)
+        
+        # Enviar a todos los miembros pendientes
+        pendientes = db_handler.get_miembros_pendientes_envio(campana_id)
+        
+        current_app.logger.info(f"[SEND] Batch iniciado - {len(pendientes)} pendientes")
         
         results = []
-        delay = current_app.config['DELAY_SECONDS']
+        delay = current_app.config.get('DELAY_SECONDS', 1.5)
         
-        for i, student in enumerate(pending_students):
-            phone = student.get('telefono_e164')
+        for i, miembro in enumerate(pendientes):
+            phone = miembro.get('telefono_e164')
             if not phone: continue
             
-            # Construir parámetros (Asegurar que coinciden con tu plantilla)
+            # Construir parámetros con datos JOINed del nuevo esquema
             params = [
-                str(student.get('nombre', '')),
-                str(student.get('modalidad', '')),
-                str(student.get('bootcamp_nombre', '')),
-                str(student.get('ingles_inicio', '')),
-                str(student.get('ingles_fin', '')),
-                str(student.get('inicio_formacion', '')),
-                str(student.get('horario', '')),
-                str(student.get('lugar', ''))
+                str(miembro.get('nombre', '')),
+                str(miembro.get('modalidad', '')),
+                str(miembro.get('bootcamp_nombre', '')),
+                str(miembro.get('fecha_inicio_ingles', '')),
+                '',  # ingles_fin deprecated
+                str(miembro.get('fecha_inicio_tecnica', '')),
+                str(miembro.get('horario', '')),
+                str(miembro.get('lugar', ''))
             ]
             
             current_app.logger.info(f"[BATCH] Enviando a {phone} con params: {params[:2]}...")
@@ -93,19 +113,29 @@ def send_batch_messages():
             
             current_app.logger.info(f"[BATCH] Resultado {phone}: success={success}, result={result}")
             
-            # Actualizar BD
+            # Actualizar estado en campana_miembros
+            miembro_id = miembro.get('miembro_id')
             status = 'sent' if success else 'error'
-            db_handler.update_estado_envio(phone, status, result if success else None)
+            db_handler.update_miembro_estado_envio(
+                int(miembro_id), status, result if success else None
+            )
             
             results.append({'phone': phone, 'success': success, 'result': result})
             
-            if i < len(pending_students) - 1:
+            if i < len(pendientes) - 1:
                 time.sleep(delay)
+        
+        # Marcar campaña como completada
+        db_handler.update_campana_estado(campana_id, 'COMPLETED')
+        
+        enviados = sum(1 for r in results if r['success'])
+        errores = sum(1 for r in results if not r['success'])
                 
         return jsonify({
             'success': True, 
-            'message': 'Envío masivo completado',
-            'stats': {'processed': len(results)}
+            'message': f'Envío masivo completado: {enviados} enviados, {errores} errores',
+            'campana_id': campana_id,
+            'stats': {'processed': len(results), 'sent': enviados, 'errors': errores}
         }), 200
 
     except Exception as e:

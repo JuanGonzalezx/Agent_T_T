@@ -19,15 +19,15 @@ def check_status_node(state: AgentState):
         return {"messages": [AIMessage(content=msg)]}
 
     # 2. Extraer contexto de la Base de Datos
-    respuesta_raw = str(data.get('respuesta', 'default')).strip().lower()
+    estado_academico = str(data.get('estado_academico', 'INSCRITO')).strip().upper()
     bootcamp = data.get('bootcamp_nombre', 'tu bootcamp')
     modalidad = data.get('modalidad', 'No especificada')
-    inicio = data.get('inicio_formacion', 'Pronto')
+    inicio = data.get('fecha_inicio_tecnica', 'Pronto')
     
-    logger.info(f"[STATUS NODO] Consultando estado para {name} (Respuesta BD: '{respuesta_raw}')")
+    logger.info(f"[STATUS NODO] Consultando estado para {name} (estado_academico: '{estado_academico}')")
     
-    # 3. Determinar estado basado en el campo 'respuesta' (NO estado_envio)
-    if respuesta_raw in ['sí', 'si', 'yes']:
+    # 3. Determinar estado basado en estado_academico
+    if estado_academico == 'MATRICULADO':
         # El estudiante ya confirmó su cupo
         msg = (
             f"🎉 ¡Hola {name}!\n\n"
@@ -35,7 +35,7 @@ def check_status_node(state: AgentState):
             f"📅 *Inicio de clases:* {inicio}\n\n"
             "Pronto recibirás información sobre acceso a la plataforma. ¡Nos vemos! 🚀"
         )
-    elif respuesta_raw == 'no':
+    elif estado_academico == 'RECHAZADO':
         # El estudiante rechazó el cupo
         msg = (
             f"Hola {name},\n\n"
@@ -43,8 +43,14 @@ def check_status_node(state: AgentState):
             "Si esto fue un error o cambiaste de opinión, contáctanos a soporte@talentotech.gov.co\n\n"
             "¡Te esperamos en una próxima convocatoria! 👋"
         )
+    elif estado_academico == 'GRADUADO':
+        msg = (
+            f"🎓 ¡Felicitaciones {name}!\n\n"
+            f"Completaste exitosamente *{bootcamp}*.\n\n"
+            "Tu certificado estará disponible próximamente. ¡Éxitos! 🌟"
+        )
     else:
-        # respuesta_raw == 'default' o vacío: Pendiente de confirmación
+        # INSCRITO o pendiente de confirmación
         msg = (
             f"Hola {name} 👋\n\n"
             f"Estás registrado/a en *{bootcamp}* ({modalidad}).\n\n"
