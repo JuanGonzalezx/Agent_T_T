@@ -56,36 +56,70 @@ def send_template_route():
 @message_bp.route('/send-batch', methods=['POST'])
 def send_batch_messages():
     """
-    Envío masivo SEGURO.  Solo envía a miembros YA asignados a una campaña.
+    Envío masivo SEGURO.  Soporta 2 modos:
 
-    ⚠️  REGLA DE SEGURIDAD: Este endpoint NUNCA agrega miembros automáticamente.
-    Los miembros deben ser agregados previamente vía:
-      - POST /api/campaigns/{id}/members  (panel de campaña)
-      - El frontend al crear campaña desde el Dashboard
+    ── Modo A: Campaña existente ──
+        campana_id (int): ID de la campaña (ya debe tener miembros).
 
-    Body JSON:
-        campana_id (int, REQUIRED): ID de la campaña a enviar.
-            La campaña debe existir y tener miembros asignados.
-        plantilla_whatsapp (str, optional): Override del template de Meta.
-        skip_already_sent (bool, optional): Si true, solo envía a pendientes
-            (default: true — es decir, nunca reenvía a quien ya recibió).
+    ── Modo B: Crear campaña nueva + enviar ──
+        campana_nombre (str): Nombre de la nueva campaña.
+        tipo (str): MATRICULA | EVENTO | INFO
+        estudiante_ids (list[int], REQUIRED): IDs de estudiantes a enviar.
+            Viene del upload (/api/google/upload → response.estudiante_ids).
 
-    Flujo:
-        1. Valida que la campaña exista y tenga miembros
-        2. Resuelve plantilla/language desde la campaña o override
-        3. Obtiene SOLO los miembros pendientes de ESTA campaña
-        4. Envía y actualiza estado de cada miembro
+    Campos comunes (opcionales):
+        plantilla_whatsapp (str): Override del template de Meta.
+        language_code (str): Override del idioma.
+        skip_already_sent (bool): No aplica en modo B (siempre son nuevos).
+
+    ⚠️  SEGURIDAD: En modo B, los miembros se toman EXCLUSIVAMENTE de
+    estudiante_ids. NUNCA se agregan todos los estudiantes de la BD.
     """
     try:
         data = request.get_json() or {}
         campana_id = data.get('campana_id')
+        campana_nombre = data.get('campana_nombre')
         plantilla_override = data.get('plantilla_whatsapp')
+        estudiante_ids = data.get('estudiante_ids')  # lista de IDs del upload
 
-        # ─── 1. VALIDAR: campana_id es OBLIGATORIO ───
-        if not campana_id:
+        # ─── MODO B: Crear campaña nueva ───
+        if not campana_id and campana_nombre:
+            tipo_param = (data.get('tipo') or 'MATRICULA').upper()
+
+            if not estudiante_ids or not isinstance(estudiante_ids, list) or len(estudiante_ids) == 0:
+                return jsonify({
+                    'success': False,
+                    'error': 'estudiante_ids es requerido al crear campaña nueva. '
+                             'Sube estudiantes primero (upload) y pasa los IDs devueltos.'
+                }), 400
+
+            # Crear la campaña
+            ok, result = db_handler.insert_campana(
+                nombre=campana_nombre,
+                tipo=tipo_param,
+                plantilla_whatsapp=plantilla_override or ''
+            )
+            if not ok:
+                return jsonify({'success': False, 'error': f'Error creando campaña: {result}'}), 400
+
+            campana_id = int(result)
+            current_app.logger.info(
+                f"[BATCH] Campaña nueva creada: #{campana_id} '{campana_nombre}' "
+                f"tipo={tipo_param}, estudiantes={len(estudiante_ids)}"
+            )
+
+            # Agregar SOLO los estudiantes explícitos como miembros
+            ok, msg = db_handler.insert_campana_miembros(
+                campana_id, [int(x) for x in estudiante_ids]
+            )
+            if not ok:
+                return jsonify({'success': False, 'error': f'Error agregando miembros: {msg}'}), 400
+
+        # ─── MODO A: Campaña existente ───
+        elif not campana_id:
             return jsonify({
                 'success': False,
-                'error': 'campana_id es requerido. Crea una campaña y agrega miembros antes de enviar.'
+                'error': 'campana_id o (campana_nombre + estudiante_ids) es requerido.'
             }), 400
 
         campana = db_handler.get_campana_by_id(int(campana_id))

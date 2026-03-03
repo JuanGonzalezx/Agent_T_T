@@ -69,6 +69,7 @@ def upload_from_google():
 
         # 5b. Crear/actualizar estudiantes
         # Solo campos del usuario; el sistema asigna opt_in=0 y estado_academico='INSCRITO' por defecto
+        uploaded_estudiante_ids = []  # IDs de estudiantes procesados en este upload
         for _, row in df.iterrows():
             row_dict = row.to_dict()
             bootcamp_codigo = str(row_dict.get('bootcamp_id', ''))
@@ -79,7 +80,9 @@ def upload_from_google():
                 'email': row_dict.get('email', ''),
                 'bootcamp_id': bootcamp_id_map.get(bootcamp_codigo),
             }
-            db_handler.insert_or_update_estudiante(estudiante_data)
+            ok, est_id = db_handler.insert_or_update_estudiante(estudiante_data)
+            if ok and est_id is not None:
+                uploaded_estudiante_ids.append(int(est_id))
 
         # 6. Actualizar Drive (Crear columnas nuevas)
         update_success = False
@@ -99,7 +102,8 @@ def upload_from_google():
             'message': 'Procesado y Sincronizado',
             'total_rows': len(df),
             'csv_data': csv_output.getvalue(),
-            'columns': df.columns.tolist()
+            'columns': df.columns.tolist(),
+            'estudiante_ids': uploaded_estudiante_ids
         }), 200
 
     except Exception as e:

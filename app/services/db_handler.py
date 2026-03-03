@@ -472,7 +472,15 @@ class DatabaseHandler:
                 telefono, nombre, documento, email,
                 bootcamp_id, opt_in, estado_academico
             ))
-            return True, f"Estudiante {nombre} registrado/actualizado"
+            # Recuperar el ID del estudiante (insertado o actualizado)
+            row = self._execute_query(
+                "SELECT id FROM estudiantes WHERE telefono_e164 = ?",
+                (telefono,), fetch_one=True
+            )
+            est_id = row['id'] if row else None
+            if est_id and isinstance(est_id, dict):
+                est_id = est_id.get('value', est_id)
+            return True, est_id
         except Exception as e:
             return False, f"Error al guardar estudiante: {str(e)}"
 
