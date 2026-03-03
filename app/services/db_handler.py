@@ -285,6 +285,8 @@ class DatabaseHandler:
         # Migraciones: agregar columnas nuevas a tablas existentes
         migrations = [
             "ALTER TABLE bootcamps ADD COLUMN fecha_fin_ingles TEXT",
+            # Evitar que un estudiante pueda ser agregado 2 veces a la misma campaña
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cm_campana_estudiante ON campana_miembros(campana_id, estudiante_id)",
         ]
 
         if self.use_turso:
@@ -1012,19 +1014,44 @@ class DatabaseHandler:
 
     def insert_campana_miembros(self, campana_id: int, estudiante_ids: List[int],
                                  variables_contexto_list: List[str] = None) -> Tuple[bool, str]:
-        """Agrega miembros a una campaña."""
+        """
+        Agrega miembros a una campaña. Ignora duplicados automáticamente.
+        
+        Protecciones:
+          - UNIQUE INDEX (campana_id, estudiante_id) previene duplicados en DB.
+          - INSERT OR IGNORE / try-except como doble red de seguridad.
+        """
         try:
+            added = 0
+            skipped = 0
             for i, est_id in enumerate(estudiante_ids):
                 variables = (variables_contexto_list[i]
                              if variables_contexto_list and i < len(variables_contexto_list)
                              else '')
-                self._execute_query('''
-                    INSERT INTO campana_miembros (campana_id, estudiante_id, variables_contexto, estado_envio)
-                    VALUES (?, ?, ?, 'pending')
-                ''', (campana_id, est_id, variables))
-            return True, f"{len(estudiante_ids)} miembros agregados a campaña {campana_id}"
+                try:
+                    self._execute_query('''
+                        INSERT OR IGNORE INTO campana_miembros
+                            (campana_id, estudiante_id, variables_contexto, estado_envio)
+                        VALUES (?, ?, ?, 'pending')
+                    ''', (campana_id, est_id, variables))
+                    added += 1
+                except Exception:
+                    # Duplicado capturado por Turso o constraint
+                    skipped += 1
+            return True, f"{added} miembros agregados a campaña {campana_id} ({skipped} duplicados ignorados)"
         except Exception as e:
             return False, f"Error agregando miembros: {str(e)}"
+
+    def count_miembros_campana(self, campana_id: int) -> int:
+        """Cuenta cuántos miembros tiene una campaña."""
+        try:
+            result = self._execute_query(
+                'SELECT COUNT(*) as total FROM campana_miembros WHERE campana_id = ?',
+                (campana_id,), fetch_one=True
+            )
+            return int(result.get('total', 0)) if result else 0
+        except Exception:
+            return 0
 
     def get_miembros_pendientes_envio(self, campana_id: int) -> List[Dict[str, Any]]:
         """Obtiene miembros pendientes de envío (JOIN con estudiantes y bootcamps)."""

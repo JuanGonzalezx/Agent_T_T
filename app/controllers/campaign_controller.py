@@ -115,6 +115,8 @@ def add_members(campana_id):
     """
     Agrega miembros a una campaña.
     
+    Duplicados se ignoran automáticamente (UNIQUE constraint en DB).
+    
     Body JSON opción 1 (por IDs):
         estudiante_ids (list[int]): IDs de estudiantes
         variables_contexto (list[str], optional): JSON strings por estudiante
@@ -122,8 +124,11 @@ def add_members(campana_id):
     Body JSON opción 2 (por bootcamp):
         bootcamp_id (str): Agrega todos los estudiantes de este bootcamp
         
-    Body JSON opción 3 (todos los estudiantes):
-        all_opt_in (bool): True para agregar todos los estudiantes
+    Body JSON opción 3 (todos, filtrado inteligente):
+        all_opt_in (bool): True para agregar estudiantes.
+            - Para MATRICULA/EVENTO: solo agrega los que NO hayan recibido
+              una campaña del mismo tipo (evita duplicados entre campañas).
+            - Para INFO: agrega TODOS (notificaciones pueden repetirse).
     """
     try:
         campana = db_handler.get_campana_by_id(campana_id)
@@ -133,9 +138,10 @@ def add_members(campana_id):
         data = request.get_json() or {}
         estudiante_ids = []
         variables_list = data.get('variables_contexto', [])
+        tipo_campana = campana.get('tipo', '').upper()
         
         if 'estudiante_ids' in data:
-            # Opción 1: IDs directos
+            # Opción 1: IDs directos (selección manual desde el panel)
             estudiante_ids = [int(x) for x in data['estudiante_ids']]
             
         elif 'bootcamp_id' in data:
@@ -145,8 +151,14 @@ def add_members(campana_id):
             estudiante_ids = [int(e['id']) for e in estudiantes if e.get('id')]
             
         elif data.get('all_opt_in'):
-            # Opción 3: Todos los estudiantes
-            estudiantes = db_handler.get_estudiantes_pendientes_envio()
+            # Opción 3: Todos — con filtro inteligente según tipo
+            if tipo_campana == 'INFO':
+                # INFO (notificaciones) → se puede enviar a TODOS
+                estudiantes = db_handler.get_estudiantes_opt_in()
+            else:
+                # MATRICULA / EVENTO → solo a quienes NO hayan recibido
+                # una campaña del mismo tipo con estado 'sent'
+                estudiantes = db_handler.get_estudiantes_sin_campana_enviada(tipo_campana)
             estudiante_ids = [int(e['id']) for e in estudiantes if e.get('id')]
         else:
             return jsonify({
@@ -155,14 +167,24 @@ def add_members(campana_id):
             }), 400
         
         if not estudiante_ids:
-            return jsonify({'success': False, 'error': 'No se encontraron estudiantes'}), 404
+            return jsonify({
+                'success': False,
+                'error': 'No se encontraron estudiantes elegibles. '
+                         'Posiblemente todos ya fueron enviados en otra campaña del mismo tipo.'
+            }), 404
         
         success, msg = db_handler.insert_campana_miembros(
             campana_id, estudiante_ids, variables_list
         )
         
         if success:
-            return jsonify({'success': True, 'message': msg, 'total_added': len(estudiante_ids)}), 200
+            # Obtener conteo real post-inserción (duplicados fueron ignorados)
+            total_actual = db_handler.count_miembros_campana(campana_id)
+            return jsonify({
+                'success': True,
+                'message': msg,
+                'total_miembros_campana': total_actual
+            }), 200
         return jsonify({'success': False, 'error': msg}), 400
         
     except Exception as e:

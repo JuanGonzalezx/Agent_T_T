@@ -56,94 +56,79 @@ def send_template_route():
 @message_bp.route('/send-batch', methods=['POST'])
 def send_batch_messages():
     """
-    Envío masivo dinámico.  Soporta múltiples tipos de campaña.
+    Envío masivo SEGURO.  Solo envía a miembros YA asignados a una campaña.
+
+    ⚠️  REGLA DE SEGURIDAD: Este endpoint NUNCA agrega miembros automáticamente.
+    Los miembros deben ser agregados previamente vía:
+      - POST /api/campaigns/{id}/members  (panel de campaña)
+      - El frontend al crear campaña desde el Dashboard
 
     Body JSON:
-        tipo (str, required): MATRICULA | EVENTO | INFO
-        campana_id (int, optional): Usar campaña existente (se traen datos de ella)
-        campana_nombre (str, optional): Nombre para nueva campaña
-        plantilla_whatsapp (str, optional): Override del template de Meta
-        skip_already_sent (bool, optional): Omitir estudiantes ya enviados en
-            otra campaña del mismo tipo (default: true)
-    
-    Nota: language_code se resuelve automáticamente según TEMPLATE_DEFAULTS.
+        campana_id (int, REQUIRED): ID de la campaña a enviar.
+            La campaña debe existir y tener miembros asignados.
+        plantilla_whatsapp (str, optional): Override del template de Meta.
+        skip_already_sent (bool, optional): Si true, solo envía a pendientes
+            (default: true — es decir, nunca reenvía a quien ya recibió).
 
     Flujo:
-        1. Determina plantilla según tipo o override
-        2. Crea campaña o usa la existente
-        3. Filtra estudiantes (excluye ya enviados si aplica)
-        4. Agrega miembros + envía usando _build_template_params
+        1. Valida que la campaña exista y tenga miembros
+        2. Resuelve plantilla/language desde la campaña o override
+        3. Obtiene SOLO los miembros pendientes de ESTA campaña
+        4. Envía y actualiza estado de cada miembro
     """
     try:
         data = request.get_json() or {}
-        tipo = (data.get('tipo') or 'MATRICULA').upper()
         campana_id = data.get('campana_id')
-        campana_nombre = data.get('campana_nombre')
         plantilla_override = data.get('plantilla_whatsapp')
-        skip_already_sent = data.get('skip_already_sent', True)
 
-        # ─── 1. Resolver plantilla y language_code según tipo ───
-        # El language_code SIEMPRE se toma de TEMPLATE_DEFAULTS porque
-        # debe coincidir con el idioma registrado en Meta para la plantilla.
+        # ─── 1. VALIDAR: campana_id es OBLIGATORIO ───
+        if not campana_id:
+            return jsonify({
+                'success': False,
+                'error': 'campana_id es requerido. Crea una campaña y agrega miembros antes de enviar.'
+            }), 400
+
+        campana = db_handler.get_campana_by_id(int(campana_id))
+        if not campana:
+            return jsonify({'success': False, 'error': f'Campaña {campana_id} no encontrada'}), 404
+
+        campana_id = int(campana['id'])
+        tipo = campana.get('tipo', 'MATRICULA').upper()
+
+        # ─── 2. VALIDAR: La campaña debe tener miembros ───
+        total_miembros = db_handler.count_miembros_campana(campana_id)
+        if total_miembros == 0:
+            return jsonify({
+                'success': False,
+                'error': f'La campaña #{campana_id} no tiene miembros asignados. '
+                         'Agrega miembros antes de enviar (POST /api/campaigns/{id}/members).'
+            }), 400
+
+        current_app.logger.info(
+            f"[BATCH] Campaña #{campana_id} ({campana.get('nombre')}) "
+            f"tipo={tipo}, miembros={total_miembros}"
+        )
+
+        # ─── 3. Resolver plantilla y language_code ───
         defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'})
-        template_name = plantilla_override or defaults['plantilla']
+        template_name = plantilla_override or campana.get('plantilla_whatsapp') or defaults['plantilla']
         language_code = defaults['language']
 
-        current_app.logger.info(f"[BATCH] Tipo={tipo}, template={template_name}, lang={language_code}, campana_id={campana_id}")
+        current_app.logger.info(f"[BATCH] template={template_name}, lang={language_code}")
 
-        # ─── 2. Resolver / crear campaña ───
-        if campana_id:
-            # Usar campaña existente
-            campana = db_handler.get_campana_by_id(int(campana_id))
-            if not campana:
-                return jsonify({'success': False, 'error': f'Campaña {campana_id} no encontrada'}), 404
-            # Traer tipo y plantilla de la campaña existente si no se pasaron
-            tipo = campana.get('tipo', tipo)
-            if not plantilla_override and campana.get('plantilla_whatsapp'):
-                template_name = campana['plantilla_whatsapp']
-            campana_id = int(campana['id'])
-            current_app.logger.info(f"[BATCH] Usando campaña existente #{campana_id}: {campana.get('nombre')}")
-        else:
-            # Crear campaña nueva
-            from datetime import datetime
-            if not campana_nombre:
-                campana_nombre = f"{tipo} Batch {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            success_c, result = db_handler.insert_campana(
-                nombre=campana_nombre,
-                tipo=tipo,
-                plantilla_whatsapp=template_name
-            )
-            if not success_c:
-                return jsonify({'success': False, 'error': f'Error creando campaña: {result}'}), 500
-            campana_id = result
-            current_app.logger.info(f"[BATCH] Campaña creada #{campana_id}: {campana_nombre}")
+        # ─── 4. Obtener SOLO miembros pendientes de ESTA campaña ───
+        pendientes = db_handler.get_miembros_pendientes_envio(campana_id)
+        current_app.logger.info(f"[BATCH] {len(pendientes)} miembros pendientes de campaña #{campana_id}")
 
-        # ─── 3. Obtener estudiantes (filtrando duplicados si aplica) ───
-        if skip_already_sent:
-            opt_in_students = db_handler.get_estudiantes_sin_campana_enviada(tipo)
-        else:
-            opt_in_students = db_handler.get_estudiantes_opt_in()
-
-        current_app.logger.info(f"[BATCH] Estudiantes elegibles: {len(opt_in_students)}")
-
-        if not opt_in_students:
-            stats = db_handler.get_estadisticas()
+        if not pendientes:
             return jsonify({
                 'success': True,
-                'message': 'No hay estudiantes pendientes de envío para este tipo de campaña',
+                'message': 'No hay miembros pendientes de envío en esta campaña',
                 'campana_id': campana_id,
-                'stats': stats
+                'stats': {'processed': 0, 'sent': 0, 'errors': 0}
             }), 200
 
-        # ─── 4. Agregar miembros a la campaña ───
-        estudiante_ids = [int(s['id']) for s in opt_in_students if s.get('id')]
-        db_handler.insert_campana_miembros(campana_id, estudiante_ids)
-
         # ─── 5. Enviar mensajes ───
-        pendientes = db_handler.get_miembros_pendientes_envio(campana_id)
-        current_app.logger.info(f"[BATCH] Enviando a {len(pendientes)} miembros pendientes")
-
-        # Actualizar estado de campaña a SENDING
         db_handler.update_campana_estado(campana_id, 'SENDING')
 
         results = []
@@ -154,16 +139,14 @@ def send_batch_messages():
             if not phone:
                 continue
 
-            # Construir parámetros dinámicos según tipo de campaña
             params = _build_template_params(miembro, tipo)
 
-            current_app.logger.info(f"[BATCH] [{i+1}/{len(pendientes)}] → {phone} params={params[:2]}...")
+            current_app.logger.info(f"[BATCH] [{i+1}/{len(pendientes)}] → {phone}")
 
             success, result = whatsapp_service.send_template_message(
                 phone, template_name, params, language_code
             )
 
-            # Actualizar estado del miembro
             miembro_id = miembro.get('miembro_id')
             status = 'sent' if success else 'error'
             db_handler.update_miembro_estado_envio(
@@ -175,7 +158,6 @@ def send_batch_messages():
             if i < len(pendientes) - 1:
                 time.sleep(delay)
 
-        # Marcar campaña como completada
         db_handler.update_campana_estado(campana_id, 'COMPLETED')
 
         enviados = sum(1 for r in results if r['success'])
