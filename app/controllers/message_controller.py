@@ -209,7 +209,7 @@ def send_batch_messages():
         # ════════════════════════════════════════════════════════
         defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'})
         template_name = plantilla_override or (campana.get('plantilla_whatsapp') if campana else '') or defaults['plantilla']
-        language_code = data.get('language_code') or defaults['language']
+        language_code = defaults['language']
 
         current_app.logger.info(
             f"[BATCH] Campaña #{campana_id} tipo={tipo}, "
