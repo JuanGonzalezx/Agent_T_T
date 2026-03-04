@@ -70,7 +70,8 @@ def send_batch_messages():
     Campos comunes (opcionales):
         plantilla_whatsapp (str): Override del template de Meta.
         language_code (str): Override del idioma.
-        skip_already_sent (bool): No aplica en modo B (siempre son nuevos).
+        skip_already_sent (bool): Si true, filtra estudiantes que ya
+            recibieron una campaña del mismo tipo (default: false).
 
     ⚠️  SEGURIDAD: En modo B, los miembros se toman EXCLUSIVAMENTE de
     estudiante_ids. NUNCA se agregan todos los estudiantes de la BD.
@@ -81,6 +82,7 @@ def send_batch_messages():
         campana_nombre = data.get('campana_nombre')
         plantilla_override = data.get('plantilla_whatsapp')
         estudiante_ids = data.get('estudiante_ids')  # lista de IDs del upload
+        skip_already_sent = data.get('skip_already_sent', False)
 
         # ─── MODO B: Crear campaña nueva ───
         if not campana_id and campana_nombre:
@@ -92,6 +94,38 @@ def send_batch_messages():
                     'error': 'estudiante_ids es requerido al crear campaña nueva. '
                              'Sube estudiantes primero (upload) y pasa los IDs devueltos.'
                 }), 400
+
+            # ─── FILTRO skip_already_sent ───
+            # Si está activo, eliminar de estudiante_ids los que ya recibieron
+            # una campaña del mismo tipo con estado_envio='sent'.
+            ids_filtrados = [int(x) for x in estudiante_ids]
+            skipped_ids = []
+
+            if skip_already_sent and tipo_param != 'INFO':
+                # Obtener set de IDs que NO tienen campaña enviada de este tipo
+                elegibles = db_handler.get_estudiantes_sin_campana_enviada(tipo_param)
+                elegibles_ids = {int(e['id']) for e in elegibles}
+
+                ids_originales = ids_filtrados[:]
+                ids_filtrados = [eid for eid in ids_filtrados if eid in elegibles_ids]
+                skipped_ids = [eid for eid in ids_originales if eid not in elegibles_ids]
+
+                current_app.logger.info(
+                    f"[BATCH] skip_already_sent: {len(ids_originales)} originales → "
+                    f"{len(ids_filtrados)} elegibles, {len(skipped_ids)} omitidos"
+                )
+
+                if not ids_filtrados:
+                    return jsonify({
+                        'success': True,
+                        'message': f'Todos los {len(skipped_ids)} estudiantes ya fueron '
+                                   f'enviados en otra campaña de tipo {tipo_param}. '
+                                   'No se creó la campaña.',
+                        'stats': {
+                            'processed': 0, 'sent': 0, 'errors': 0,
+                            'skipped': len(skipped_ids)
+                        }
+                    }), 200
 
             # Crear la campaña
             ok, result = db_handler.insert_campana(
@@ -105,13 +139,12 @@ def send_batch_messages():
             campana_id = int(result)
             current_app.logger.info(
                 f"[BATCH] Campaña nueva creada: #{campana_id} '{campana_nombre}' "
-                f"tipo={tipo_param}, estudiantes={len(estudiante_ids)}"
+                f"tipo={tipo_param}, estudiantes={len(ids_filtrados)}"
+                f"{f', omitidos={len(skipped_ids)}' if skipped_ids else ''}"
             )
 
-            # Agregar SOLO los estudiantes explícitos como miembros
-            ok, msg = db_handler.insert_campana_miembros(
-                campana_id, [int(x) for x in estudiante_ids]
-            )
+            # Agregar SOLO los estudiantes filtrados como miembros
+            ok, msg = db_handler.insert_campana_miembros(campana_id, ids_filtrados)
             if not ok:
                 return jsonify({'success': False, 'error': f'Error agregando miembros: {msg}'}), 400
 
