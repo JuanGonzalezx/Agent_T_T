@@ -59,143 +59,181 @@ def send_batch_messages():
     Envío masivo SEGURO.  Soporta 2 modos:
 
     ── Modo A: Campaña existente ──
-        campana_id (int): ID de la campaña (ya debe tener miembros).
+        campana_id (int): ID de la campaña.
+        estudiante_ids (list[int], opcional): Si se pasan, se agregan como
+            nuevos miembros a la campaña antes de enviar.  Permite envíos
+            incrementales (hoy 50, mañana 50 más, etc.).
 
     ── Modo B: Crear campaña nueva + enviar ──
         campana_nombre (str): Nombre de la nueva campaña.
         tipo (str): MATRICULA | EVENTO | INFO
         estudiante_ids (list[int], REQUIRED): IDs de estudiantes a enviar.
-            Viene del upload (/api/google/upload → response.estudiante_ids).
 
     Campos comunes (opcionales):
         plantilla_whatsapp (str): Override del template de Meta.
         language_code (str): Override del idioma.
         skip_already_sent (bool): Si true, filtra estudiantes que ya
             recibieron una campaña del mismo tipo (default: false).
+            Aplica en AMBOS modos.
 
-    ⚠️  SEGURIDAD: En modo B, los miembros se toman EXCLUSIVAMENTE de
-    estudiante_ids. NUNCA se agregan todos los estudiantes de la BD.
+    ⚠️  SEGURIDAD: Los miembros se toman EXCLUSIVAMENTE de estudiante_ids.
+    NUNCA se agregan todos los estudiantes de la BD automáticamente.
     """
     try:
         data = request.get_json() or {}
         campana_id = data.get('campana_id')
         campana_nombre = data.get('campana_nombre')
         plantilla_override = data.get('plantilla_whatsapp')
-        estudiante_ids = data.get('estudiante_ids')  # lista de IDs del upload
         skip_already_sent = data.get('skip_already_sent', False)
 
-        # ─── MODO B: Crear campaña nueva ───
-        if not campana_id and campana_nombre:
-            tipo_param = (data.get('tipo') or 'MATRICULA').upper()
+        # Parsear estudiante_ids de forma segura
+        raw_ids = data.get('estudiante_ids')
+        estudiante_ids = []
+        if raw_ids and isinstance(raw_ids, list) and len(raw_ids) > 0:
+            estudiante_ids = [int(x) for x in raw_ids]
 
-            if not estudiante_ids or not isinstance(estudiante_ids, list) or len(estudiante_ids) == 0:
+        # ════════════════════════════════════════════════════════
+        # PASO 1: Resolver o crear la campaña
+        # ════════════════════════════════════════════════════════
+        is_new_campaign = False
+
+        if campana_id:
+            # ─── MODO A: Campaña existente ───
+            campana = db_handler.get_campana_by_id(int(campana_id))
+            if not campana:
+                return jsonify({'success': False, 'error': f'Campaña {campana_id} no encontrada'}), 404
+            campana_id = int(campana['id'])
+            tipo = campana.get('tipo', 'MATRICULA').upper()
+
+        elif campana_nombre:
+            # ─── MODO B: Crear campaña nueva ───
+            is_new_campaign = True
+            tipo = (data.get('tipo') or 'MATRICULA').upper()
+
+            if not estudiante_ids:
                 return jsonify({
                     'success': False,
                     'error': 'estudiante_ids es requerido al crear campaña nueva. '
                              'Sube estudiantes primero (upload) y pasa los IDs devueltos.'
                 }), 400
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'campana_id o (campana_nombre + estudiante_ids) es requerido.'
+            }), 400
 
-            # ─── FILTRO skip_already_sent ───
-            # Si está activo, eliminar de estudiante_ids los que ya recibieron
-            # una campaña del mismo tipo con estado_envio='sent'.
-            ids_filtrados = [int(x) for x in estudiante_ids]
-            skipped_ids = []
+        # ════════════════════════════════════════════════════════
+        # PASO 2: Filtrar estudiante_ids con skip_already_sent
+        # ════════════════════════════════════════════════════════
+        ids_to_add = estudiante_ids[:]  # copia
+        skipped_count = 0
 
-            if skip_already_sent and tipo_param != 'INFO':
-                # Obtener set de IDs que NO tienen campaña enviada de este tipo
-                elegibles = db_handler.get_estudiantes_sin_campana_enviada(tipo_param)
-                elegibles_ids = {int(e['id']) for e in elegibles}
+        if ids_to_add and skip_already_sent and tipo != 'INFO':
+            # Obtener IDs de estudiantes que NO han recibido este tipo de campaña
+            elegibles = db_handler.get_estudiantes_sin_campana_enviada(tipo)
+            # Extraer IDs de forma segura (Turso devuelve strings, SQLite ints)
+            elegibles_ids = set()
+            for e in elegibles:
+                eid = e.get('id')
+                if eid is not None:
+                    try:
+                        elegibles_ids.add(int(eid))
+                    except (ValueError, TypeError):
+                        pass
 
-                ids_originales = ids_filtrados[:]
-                ids_filtrados = [eid for eid in ids_filtrados if eid in elegibles_ids]
-                skipped_ids = [eid for eid in ids_originales if eid not in elegibles_ids]
+            original_count = len(ids_to_add)
+            ids_to_add = [eid for eid in ids_to_add if eid in elegibles_ids]
+            skipped_count = original_count - len(ids_to_add)
 
-                current_app.logger.info(
-                    f"[BATCH] skip_already_sent: {len(ids_originales)} originales → "
-                    f"{len(ids_filtrados)} elegibles, {len(skipped_ids)} omitidos"
-                )
+            current_app.logger.info(
+                f"[BATCH] skip_already_sent: {original_count} originales → "
+                f"{len(ids_to_add)} elegibles, {skipped_count} omitidos"
+            )
 
-                if not ids_filtrados:
-                    return jsonify({
-                        'success': True,
-                        'message': f'Todos los {len(skipped_ids)} estudiantes ya fueron '
-                                   f'enviados en otra campaña de tipo {tipo_param}. '
-                                   'No se creó la campaña.',
-                        'stats': {
-                            'processed': 0, 'sent': 0, 'errors': 0,
-                            'skipped': len(skipped_ids)
-                        }
-                    }), 200
+        # ════════════════════════════════════════════════════════
+        # PASO 3: Crear campaña (solo Modo B)
+        # ════════════════════════════════════════════════════════
+        if is_new_campaign:
+            # Si todos fueron filtrados, no crear campaña
+            if not ids_to_add:
+                return jsonify({
+                    'success': True,
+                    'message': f'Los {skipped_count} estudiantes ya fueron '
+                               f'enviados en otra campaña de tipo {tipo}. '
+                               'No se creó la campaña.',
+                    'stats': {
+                        'processed': 0, 'sent': 0, 'errors': 0,
+                        'skipped': skipped_count
+                    }
+                }), 200
 
-            # Crear la campaña
             ok, result = db_handler.insert_campana(
                 nombre=campana_nombre,
-                tipo=tipo_param,
+                tipo=tipo,
                 plantilla_whatsapp=plantilla_override or ''
             )
             if not ok:
                 return jsonify({'success': False, 'error': f'Error creando campaña: {result}'}), 400
 
             campana_id = int(result)
+            campana = db_handler.get_campana_by_id(campana_id)
             current_app.logger.info(
-                f"[BATCH] Campaña nueva creada: #{campana_id} '{campana_nombre}' "
-                f"tipo={tipo_param}, estudiantes={len(ids_filtrados)}"
-                f"{f', omitidos={len(skipped_ids)}' if skipped_ids else ''}"
+                f"[BATCH] Campaña nueva: #{campana_id} '{campana_nombre}' "
+                f"tipo={tipo}, estudiantes={len(ids_to_add)}"
+                f"{f', omitidos={skipped_count}' if skipped_count else ''}"
             )
 
-            # Agregar SOLO los estudiantes filtrados como miembros
-            ok, msg = db_handler.insert_campana_miembros(campana_id, ids_filtrados)
+        # ════════════════════════════════════════════════════════
+        # PASO 4: Agregar miembros (ambos modos, si hay estudiante_ids)
+        # INSERT OR IGNORE: duplicados se ignoran automáticamente
+        # ════════════════════════════════════════════════════════
+        if ids_to_add:
+            ok, msg = db_handler.insert_campana_miembros(campana_id, ids_to_add)
             if not ok:
                 return jsonify({'success': False, 'error': f'Error agregando miembros: {msg}'}), 400
+            current_app.logger.info(f"[BATCH] Miembros agregados: {msg}")
 
-        # ─── MODO A: Campaña existente ───
-        elif not campana_id:
-            return jsonify({
-                'success': False,
-                'error': 'campana_id o (campana_nombre + estudiante_ids) es requerido.'
-            }), 400
-
-        campana = db_handler.get_campana_by_id(int(campana_id))
-        if not campana:
-            return jsonify({'success': False, 'error': f'Campaña {campana_id} no encontrada'}), 404
-
-        campana_id = int(campana['id'])
-        tipo = campana.get('tipo', 'MATRICULA').upper()
-
-        # ─── 2. VALIDAR: La campaña debe tener miembros ───
+        # ════════════════════════════════════════════════════════
+        # PASO 5: Validar que haya miembros pendientes
+        # ════════════════════════════════════════════════════════
         total_miembros = db_handler.count_miembros_campana(campana_id)
         if total_miembros == 0:
             return jsonify({
                 'success': False,
                 'error': f'La campaña #{campana_id} no tiene miembros asignados. '
-                         'Agrega miembros antes de enviar (POST /api/campaigns/{id}/members).'
+                         'Agrega miembros antes de enviar.'
             }), 400
 
+        # ════════════════════════════════════════════════════════
+        # PASO 6: Resolver plantilla y language_code
+        # ════════════════════════════════════════════════════════
+        defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'})
+        template_name = plantilla_override or (campana.get('plantilla_whatsapp') if campana else '') or defaults['plantilla']
+        language_code = data.get('language_code') or defaults['language']
+
         current_app.logger.info(
-            f"[BATCH] Campaña #{campana_id} ({campana.get('nombre')}) "
-            f"tipo={tipo}, miembros={total_miembros}"
+            f"[BATCH] Campaña #{campana_id} tipo={tipo}, "
+            f"template={template_name}, lang={language_code}, "
+            f"total_miembros={total_miembros}"
         )
 
-        # ─── 3. Resolver plantilla y language_code ───
-        defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'})
-        template_name = plantilla_override or campana.get('plantilla_whatsapp') or defaults['plantilla']
-        language_code = defaults['language']
-
-        current_app.logger.info(f"[BATCH] template={template_name}, lang={language_code}")
-
-        # ─── 4. Obtener SOLO miembros pendientes de ESTA campaña ───
+        # ════════════════════════════════════════════════════════
+        # PASO 7: Obtener SOLO miembros pendientes de ESTA campaña
+        # ════════════════════════════════════════════════════════
         pendientes = db_handler.get_miembros_pendientes_envio(campana_id)
-        current_app.logger.info(f"[BATCH] {len(pendientes)} miembros pendientes de campaña #{campana_id}")
+        current_app.logger.info(f"[BATCH] {len(pendientes)} pendientes de campaña #{campana_id}")
 
         if not pendientes:
             return jsonify({
                 'success': True,
                 'message': 'No hay miembros pendientes de envío en esta campaña',
                 'campana_id': campana_id,
-                'stats': {'processed': 0, 'sent': 0, 'errors': 0}
+                'stats': {'processed': 0, 'sent': 0, 'errors': 0, 'skipped': skipped_count}
             }), 200
 
-        # ─── 5. Enviar mensajes ───
+        # ════════════════════════════════════════════════════════
+        # PASO 8: Enviar mensajes
+        # ════════════════════════════════════════════════════════
         db_handler.update_campana_estado(campana_id, 'SENDING')
 
         results = []
@@ -207,7 +245,6 @@ def send_batch_messages():
                 continue
 
             params = _build_template_params(miembro, tipo)
-
             current_app.logger.info(f"[BATCH] [{i+1}/{len(pendientes)}] → {phone}")
 
             success, result = whatsapp_service.send_template_message(
@@ -236,7 +273,10 @@ def send_batch_messages():
             'campana_id': campana_id,
             'template': template_name,
             'tipo': tipo,
-            'stats': {'processed': len(results), 'sent': enviados, 'errors': errores}
+            'stats': {
+                'processed': len(results), 'sent': enviados,
+                'errors': errores, 'skipped': skipped_count
+            }
         }), 200
 
     except Exception as e:
