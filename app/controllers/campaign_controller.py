@@ -18,8 +18,24 @@ logger = logging.getLogger(__name__)
 TEMPLATE_DEFAULTS = {
     'MATRICULA': {'plantilla': 'prueba_matricula', 'language': 'es'},
     'EVENTO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
-    'INFO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
+    'INFO': {'plantilla': 'recordatorio_presencial', 'language': 'es_CO'},
 }
+
+# Catálogo de plantillas INFO disponibles para recordatorios/anuncios
+INFO_TEMPLATES = {
+    'recordatorio_presencial': {
+        'language': 'es_CO',
+        'descripcion': 'Recordatorio inicio bootcamp presencial',
+        'params': ['nombre', 'bootcamp_nombre', 'fecha_inicio_tecnica', 'horario', 'lugar'],
+    },
+    'recordatorio_virtual': {
+        'language': 'es_CO',
+        'descripcion': 'Recordatorio inicio bootcamp virtual',
+        'params': ['nombre', 'bootcamp_nombre', 'fecha_inicio_tecnica', 'horario', 'link_plataforma'],
+    },
+}
+
+LINK_PLATAFORMA = 'https://talentotech2.com.co/campus'
 
 
 @campaign_bp.route('/templates', methods=['GET'])
@@ -31,9 +47,14 @@ def get_templates():
     tipos = [
         {'tipo': 'MATRICULA', 'plantilla': TEMPLATE_DEFAULTS['MATRICULA']['plantilla'], 'language': TEMPLATE_DEFAULTS['MATRICULA']['language'], 'descripcion': 'Confirmación de matrícula'},
         {'tipo': 'EVENTO', 'plantilla': TEMPLATE_DEFAULTS['EVENTO']['plantilla'], 'language': TEMPLATE_DEFAULTS['EVENTO']['language'], 'descripcion': 'Confirmación de evento'},
-        {'tipo': 'INFO', 'plantilla': TEMPLATE_DEFAULTS['INFO']['plantilla'], 'language': TEMPLATE_DEFAULTS['INFO']['language'], 'descripcion': 'Mensaje informativo'},
+        {'tipo': 'INFO', 'plantilla': TEMPLATE_DEFAULTS['INFO']['plantilla'], 'language': TEMPLATE_DEFAULTS['INFO']['language'], 'descripcion': 'Recordatorio / Anuncio'},
     ]
-    return jsonify({'success': True, 'templates': tipos}), 200
+    # Incluir catálogo de plantillas INFO disponibles
+    info_templates = [
+        {'plantilla': k, 'language': v['language'], 'descripcion': v['descripcion'], 'params': v['params']}
+        for k, v in INFO_TEMPLATES.items()
+    ]
+    return jsonify({'success': True, 'templates': tipos, 'info_templates': info_templates}), 200
 
 
 @campaign_bp.route('', methods=['POST'])
@@ -241,7 +262,7 @@ def send_campaign(campana_id):
                 continue
             
             # Construir parámetros según variables_contexto o datos del estudiante
-            params = _build_template_params(miembro, campana.get('tipo', ''))
+            params = _build_template_params(miembro, campana.get('tipo', ''), template_name)
             
             logger.info(f"[CAMPAIGN] Enviando a {phone} [{i+1}/{len(pendientes)}]")
             
@@ -316,12 +337,17 @@ def delete_campaign(campana_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def _build_template_params(miembro: dict, tipo_campana: str) -> list:
+def _build_template_params(miembro: dict, tipo_campana: str, plantilla: str = '') -> list:
     """
     Construye la lista de parámetros para la plantilla de WhatsApp.
     
     Si el miembro tiene variables_contexto (JSON), las usa.
     Si no, construye a partir de los datos del estudiante.
+    
+    Args:
+        miembro: Diccionario con datos del miembro (JOIN estudiante + bootcamp).
+        tipo_campana: Tipo de campaña (MATRICULA, EVENTO, INFO).
+        plantilla: Nombre de la plantilla de WhatsApp (para INFO determina los params).
     """
     # Intentar usar variables_contexto si están definidas
     variables_raw = miembro.get('variables_contexto', '')
@@ -348,15 +374,22 @@ def _build_template_params(miembro: dict, tipo_campana: str) -> list:
             str(miembro.get('lugar', ''))
         ]
     elif tipo_campana == 'EVENTO':
-        # Para eventos, los parámetros típicos son: nombre del invitado
-        # Los datos del evento (fecha, hora, lugar) están en la plantilla
         return [
             str(miembro.get('nombre', ''))
         ]
     elif tipo_campana == 'INFO':
-        return [
-            str(miembro.get('nombre', ''))
-        ]
+        # Buscar definición en el catálogo INFO_TEMPLATES
+        tpl_config = INFO_TEMPLATES.get(plantilla)
+        if tpl_config:
+            params = []
+            for field in tpl_config['params']:
+                if field == 'link_plataforma':
+                    params.append(LINK_PLATAFORMA)
+                else:
+                    params.append(str(miembro.get(field, '')))
+            return params
+        # Fallback: solo nombre si la plantilla no está en el catálogo
+        return [str(miembro.get('nombre', ''))]
     
     # Fallback genérico
     return [str(miembro.get('nombre', ''))]

@@ -9,7 +9,7 @@ message_bp = Blueprint('messages', __name__)
 TEMPLATE_DEFAULTS = {
     'MATRICULA': {'plantilla': 'prueba_matricula', 'language': 'es'},
     'EVENTO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
-    'INFO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
+    'INFO': {'plantilla': 'recordatorio_presencial', 'language': 'es_CO'},
 }
 
 @message_bp.route('/send-simple', methods=['POST'])
@@ -244,7 +244,7 @@ def send_batch_messages():
             if not phone:
                 continue
 
-            params = _build_template_params(miembro, tipo)
+            params = _build_template_params(miembro, tipo, template_name)
             current_app.logger.info(f"[BATCH] [{i+1}/{len(pendientes)}] → {phone}")
 
             success, result = whatsapp_service.send_template_message(
