@@ -458,15 +458,12 @@ class DatabaseHandler:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(telefono_e164)
                 DO UPDATE SET
-                    nombre = excluded.nombre,
-                    documento = CASE WHEN excluded.documento != '' THEN excluded.documento ELSE estudiantes.documento END,
-                    email = CASE WHEN excluded.email != '' THEN excluded.email ELSE estudiantes.email END,
-                    bootcamp_id = COALESCE(excluded.bootcamp_id, estudiantes.bootcamp_id),
+                    nombre = COALESCE(estudiantes.nombre, excluded.nombre),
+                    documento = CASE WHEN estudiantes.documento IS NOT NULL AND estudiantes.documento != '' THEN estudiantes.documento ELSE excluded.documento END,
+                    email = CASE WHEN estudiantes.email IS NOT NULL AND estudiantes.email != '' THEN estudiantes.email ELSE excluded.email END,
+                    bootcamp_id = COALESCE(estudiantes.bootcamp_id, excluded.bootcamp_id),
                     opt_in = 1,
-                    estado_academico = CASE
-                        WHEN excluded.estado_academico != 'INSCRITO' THEN excluded.estado_academico
-                        ELSE estudiantes.estado_academico
-                    END
+                    estado_academico = estudiantes.estado_academico
             '''
             self._execute_query(query, (
                 telefono, nombre, documento, email,
