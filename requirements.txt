@@ -1,28 +1,32 @@
-# =============================
-# Agent_T_T Dependencies
-# =============================
+# =============================================================================
+# Agent_T_T - Dependencias del Proyecto
+# =============================================================================
 
-# Web framework
-flask>=3.0.0
+# --- Framework Web ---
+Flask>=3.0.0
 flask-cors>=4.0.0
+gunicorn>=21.0.0
+Werkzeug>=3.0.0
 
-# LangChain / LangGraph
+# --- Base de Datos ---
+libsql-experimental>=0.0.47
+
+# --- APIs Externas ---
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# --- Procesamiento de Datos ---
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# --- Scheduler ---
+APScheduler>=3.10.0
+
+# --- Agente IA (LangGraph + Gemini) ---
 langgraph>=0.2.0
 langgraph-cli>=0.1.0
 langchain-google-genai>=2.0.0
 langchain-core>=0.3.0
 
-# Data processing
-pandas>=2.0.0
-
-# HTTP requests
-requests>=2.31.0
-
-# Environment variables
-python-dotenv>=1.0.0
-
-# Scheduling
-APScheduler>=3.10.0
-
-# Testing
+# --- Testing ---
 pytest>=7.0.0
