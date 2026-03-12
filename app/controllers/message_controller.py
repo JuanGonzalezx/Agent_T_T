@@ -9,7 +9,7 @@ message_bp = Blueprint('messages', __name__)
 TEMPLATE_DEFAULTS = {
     'MATRICULA': {'plantilla': 'prueba_matricula', 'language': 'es'},
     'EVENTO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
-    'INFO': {'plantilla': 'recordatorio_presencial', 'language': 'es_CO'},
+    'INFO': {'plantilla': 'recordatorio_presencial', 'language': 'es'},
 }
 
 @message_bp.route('/send-simple', methods=['POST'])
@@ -207,7 +207,7 @@ def send_batch_messages():
         # ════════════════════════════════════════════════════════
         # PASO 6: Resolver plantilla y language_code
         # ════════════════════════════════════════════════════════
-        defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'})
+        defaults = TEMPLATE_DEFAULTS.get(tipo, {'plantilla': 'prueba_matricula', 'language': 'es'})
         template_name = plantilla_override or (campana.get('plantilla_whatsapp') if campana else '') or defaults['plantilla']
         language_code = defaults['language']
 

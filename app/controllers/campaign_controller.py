@@ -18,24 +18,24 @@ logger = logging.getLogger(__name__)
 TEMPLATE_DEFAULTS = {
     'MATRICULA': {'plantilla': 'prueba_matricula', 'language': 'es'},
     'EVENTO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
-    'INFO': {'plantilla': 'recordatorio_presencial', 'language': 'es_CO'},
-    'CAPTACION': {'plantilla': 'mensaje_interesados', 'language': 'es_CO'},
+    'INFO': {'plantilla': 'recordatorio_presencial', 'language': 'es'},
+    'CAPTACION': {'plantilla': 'mensaje_interesados', 'language': 'es'},
 }
 
 # Catálogo de plantillas INFO disponibles para recordatorios/anuncios
 INFO_TEMPLATES = {
     'recordatorio_presencial': {
-        'language': 'es_CO',
+        'language': 'es',
         'descripcion': 'Recordatorio inicio bootcamp presencial',
         'params': ['nombre', 'bootcamp_nombre', 'fecha_inicio_tecnica', 'horario', 'lugar'],
     },
     'recordatorio_virtual': {
-        'language': 'es_CO',
+        'language': 'es',
         'descripcion': 'Recordatorio inicio bootcamp virtual',
         'params': ['nombre', 'bootcamp_nombre', 'fecha_inicio_tecnica', 'horario', 'link_plataforma'],
     },
     'mensaje_interesados': {
-        'language': 'es_CO',
+        'language': 'es',
         'descripcion': 'Mensaje para captación de interesados',
         'params': ['nombre'],
     },
