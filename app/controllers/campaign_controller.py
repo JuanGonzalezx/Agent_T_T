@@ -19,6 +19,7 @@ TEMPLATE_DEFAULTS = {
     'MATRICULA': {'plantilla': 'prueba_matricula', 'language': 'es'},
     'EVENTO': {'plantilla': 'confirmacion_evento_quindio', 'language': 'es_CO'},
     'INFO': {'plantilla': 'recordatorio_presencial', 'language': 'es_CO'},
+    'CAPTACION': {'plantilla': 'mensaje_interesados', 'language': 'es_CO'},
 }
 
 # Catálogo de plantillas INFO disponibles para recordatorios/anuncios
@@ -32,6 +33,11 @@ INFO_TEMPLATES = {
         'language': 'es_CO',
         'descripcion': 'Recordatorio inicio bootcamp virtual',
         'params': ['nombre', 'bootcamp_nombre', 'fecha_inicio_tecnica', 'horario', 'link_plataforma'],
+    },
+    'mensaje_interesados': {
+        'language': 'es_CO',
+        'descripcion': 'Mensaje para captación de interesados',
+        'params': ['nombre'],
     },
 }
 
@@ -48,6 +54,7 @@ def get_templates():
         {'tipo': 'MATRICULA', 'plantilla': TEMPLATE_DEFAULTS['MATRICULA']['plantilla'], 'language': TEMPLATE_DEFAULTS['MATRICULA']['language'], 'descripcion': 'Confirmación de matrícula'},
         {'tipo': 'EVENTO', 'plantilla': TEMPLATE_DEFAULTS['EVENTO']['plantilla'], 'language': TEMPLATE_DEFAULTS['EVENTO']['language'], 'descripcion': 'Confirmación de evento'},
         {'tipo': 'INFO', 'plantilla': TEMPLATE_DEFAULTS['INFO']['plantilla'], 'language': TEMPLATE_DEFAULTS['INFO']['language'], 'descripcion': 'Recordatorio / Anuncio'},
+        {'tipo': 'CAPTACION', 'plantilla': TEMPLATE_DEFAULTS['CAPTACION']['plantilla'], 'language': TEMPLATE_DEFAULTS['CAPTACION']['language'], 'descripcion': 'Captación de interesados'},
     ]
     # Incluir catálogo de plantillas INFO disponibles
     info_templates = [
@@ -166,9 +173,13 @@ def add_members(campana_id):
             estudiante_ids = [int(x) for x in data['estudiante_ids']]
             
         elif 'bootcamp_id' in data:
-            # Opción 2: Por bootcamp
+            # Opción 2: Por bootcamp (con filtro opcional por estado_academico)
             bootcamp_id = data['bootcamp_id']
-            estudiantes = db_handler.get_estudiantes_by_bootcamp(bootcamp_id)
+            estado_filtro = data.get('estado_academico_filtro')
+            if estado_filtro:
+                estudiantes = db_handler.get_estudiantes_by_bootcamp_and_estado(bootcamp_id, estado_filtro)
+            else:
+                estudiantes = db_handler.get_estudiantes_by_bootcamp(bootcamp_id)
             estudiante_ids = [int(e['id']) for e in estudiantes if e.get('id')]
             
         elif data.get('all_opt_in'):
@@ -377,6 +388,9 @@ def _build_template_params(miembro: dict, tipo_campana: str, plantilla: str = ''
         return [
             str(miembro.get('nombre', ''))
         ]
+    elif tipo_campana == 'CAPTACION':
+        # Captación de interesados: solo nombre
+        return [str(miembro.get('nombre', ''))]
     elif tipo_campana == 'INFO':
         # Buscar definición en el catálogo INFO_TEMPLATES
         tpl_config = INFO_TEMPLATES.get(plantilla)

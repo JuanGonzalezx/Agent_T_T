@@ -458,12 +458,29 @@ class DatabaseHandler:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(telefono_e164)
                 DO UPDATE SET
-                    nombre = COALESCE(estudiantes.nombre, excluded.nombre),
-                    documento = CASE WHEN estudiantes.documento IS NOT NULL AND estudiantes.documento != '' THEN estudiantes.documento ELSE excluded.documento END,
-                    email = CASE WHEN estudiantes.email IS NOT NULL AND estudiantes.email != '' THEN estudiantes.email ELSE excluded.email END,
-                    bootcamp_id = COALESCE(estudiantes.bootcamp_id, excluded.bootcamp_id),
+                    nombre = CASE
+                        WHEN estudiantes.estado_academico = 'INTERESADO' THEN excluded.nombre
+                        ELSE COALESCE(estudiantes.nombre, excluded.nombre)
+                    END,
+                    documento = CASE
+                        WHEN estudiantes.estado_academico = 'INTERESADO' THEN excluded.documento
+                        WHEN estudiantes.documento IS NOT NULL AND estudiantes.documento != '' THEN estudiantes.documento
+                        ELSE excluded.documento
+                    END,
+                    email = CASE
+                        WHEN estudiantes.estado_academico = 'INTERESADO' THEN excluded.email
+                        WHEN estudiantes.email IS NOT NULL AND estudiantes.email != '' THEN estudiantes.email
+                        ELSE excluded.email
+                    END,
+                    bootcamp_id = CASE
+                        WHEN estudiantes.estado_academico = 'INTERESADO' THEN excluded.bootcamp_id
+                        ELSE COALESCE(estudiantes.bootcamp_id, excluded.bootcamp_id)
+                    END,
                     opt_in = 1,
-                    estado_academico = estudiantes.estado_academico
+                    estado_academico = CASE
+                        WHEN estudiantes.estado_academico = 'INTERESADO' THEN excluded.estado_academico
+                        ELSE estudiantes.estado_academico
+                    END
             '''
             self._execute_query(query, (
                 telefono, nombre, documento, email,
@@ -531,6 +548,33 @@ class DatabaseHandler:
                 return self._execute_query(query, (str(bootcamp_id),), fetch_all=True) or []
         except Exception as e:
             print(f"Error obteniendo estudiantes: {str(e)}")
+            return []
+
+    def get_estudiantes_by_bootcamp_and_estado(self, bootcamp_id: int,
+                                                estado: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene estudiantes de un bootcamp filtrados por estado_academico.
+
+        Útil para recordatorios: solo enviar a MATRICULADOS de un bootcamp.
+
+        Args:
+            bootcamp_id: ID numérico del bootcamp
+            estado: Estado académico a filtrar (MATRICULADO, INSCRITO, etc.)
+        """
+        try:
+            query = '''
+                SELECT e.*, b.codigo as bootcamp_codigo, b.nombre as bootcamp_nombre,
+                       b.modalidad, b.horario, b.lugar,
+                       b.fecha_inicio_ingles, b.fecha_fin_ingles, b.fecha_inicio_tecnica
+                FROM estudiantes e
+                LEFT JOIN bootcamps b ON e.bootcamp_id = b.id
+                WHERE e.bootcamp_id = ? AND e.estado_academico = ?
+                ORDER BY e.nombre
+            '''
+            return self._execute_query(query, (int(bootcamp_id), estado.upper()),
+                                       fetch_all=True) or []
+        except Exception as e:
+            print(f"Error obteniendo estudiantes por bootcamp y estado: {str(e)}")
             return []
 
     def get_estudiantes_opt_in(self) -> List[Dict[str, Any]]:
@@ -686,6 +730,7 @@ class DatabaseHandler:
             inscritos = get_count("SELECT COUNT(*) as c FROM estudiantes WHERE estado_academico = 'INSCRITO'")
             rechazados = get_count("SELECT COUNT(*) as c FROM estudiantes WHERE estado_academico = 'RECHAZADO'")
             graduados = get_count("SELECT COUNT(*) as c FROM estudiantes WHERE estado_academico = 'GRADUADO'")
+            interesados = get_count("SELECT COUNT(*) as c FROM estudiantes WHERE estado_academico = 'INTERESADO'")
 
             # Campañas: mensajes enviados y respuestas
             mensajes_enviados = get_count("SELECT COUNT(*) as c FROM campana_miembros WHERE estado_envio = 'sent'")
@@ -702,6 +747,7 @@ class DatabaseHandler:
                 'matriculados': matriculados,
                 'rechazados': rechazados,
                 'graduados': graduados,
+                'interesados': interesados,
                 'mensajes_enviados': mensajes_enviados,
                 'mensajes_error': mensajes_error,
                 'total_respuestas': total_respuestas,
@@ -969,8 +1015,8 @@ class DatabaseHandler:
             return False, "nombre y tipo son requeridos"
 
         tipo = tipo.upper()
-        if tipo not in ('MATRICULA', 'EVENTO', 'INFO'):
-            return False, f"Tipo inválido: {tipo}. Debe ser MATRICULA, EVENTO o INFO"
+        if tipo not in ('MATRICULA', 'EVENTO', 'INFO', 'CAPTACION'):
+            return False, f"Tipo inválido: {tipo}. Debe ser MATRICULA, EVENTO, INFO o CAPTACION"
 
         # Sanitizar bootcamp_objetivo_id: debe ser int > 0 o None
         if bootcamp_objetivo_id is not None and bootcamp_objetivo_id != '':

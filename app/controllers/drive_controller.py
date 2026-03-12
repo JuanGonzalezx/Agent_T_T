@@ -13,10 +13,14 @@ def upload_from_google():
         file_id = data.get('fileId') or data.get('file_id')
         access_token = data.get('accessToken') or data.get('access_token')
         
+        # Parámetros opcionales para interesados y externos
+        default_estado = data.get('estado_academico', 'INSCRITO')
+        force_bootcamp_id = data.get('force_bootcamp_id')
+        
         if not file_id or not access_token:
             return jsonify({'success': False, 'error': 'fileId y accessToken requeridos'}), 400
         
-        current_app.logger.info(f"[DRIVE] Procesando archivo: {file_id}")
+        current_app.logger.info(f"[DRIVE] Procesando archivo: {file_id} (estado={default_estado}, force_bootcamp={force_bootcamp_id})")
         
         # 1. Metadata
         success, metadata, error = google_drive_service.get_file_metadata(file_id, access_token)
@@ -68,7 +72,8 @@ def upload_from_google():
                 bootcamp_id_map[str(bid)] = bc['id']
 
         # 5b. Crear/actualizar estudiantes
-        # Solo campos del usuario; el sistema asigna opt_in=0 y estado_academico='INSCRITO' por defecto
+        # force_bootcamp_id: fuerza asignación a un bootcamp específico (para externos en recordatorios)
+        # default_estado: estado académico inicial (INSCRITO por defecto, INTERESADO para captación)
         uploaded_estudiante_ids = []  # IDs de estudiantes procesados en este upload
         for _, row in df.iterrows():
             row_dict = row.to_dict()
@@ -78,7 +83,8 @@ def upload_from_google():
                 'nombre': row_dict.get('nombre', ''),
                 'documento': row_dict.get('documento', ''),
                 'email': row_dict.get('email', ''),
-                'bootcamp_id': bootcamp_id_map.get(bootcamp_codigo),
+                'bootcamp_id': int(force_bootcamp_id) if force_bootcamp_id else bootcamp_id_map.get(bootcamp_codigo),
+                'estado_academico': default_estado,
             }
             ok, est_id = db_handler.insert_or_update_estudiante(estudiante_data)
             if ok and est_id is not None:
