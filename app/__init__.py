@@ -56,9 +56,25 @@ def create_app():
     sync_service = SyncService(db_handler, google_drive_service)
     logic_brain = ResponseLogic(db_handler, whatsapp_service)
     
-    # Iniciar Scheduler
-    sync_service.start()
-    atexit.register(lambda: sync_service.shutdown())
+    # ════════════════════════════════════════════════════════
+    # PREVENCIÓN DE MÚLTIPLES SCHEDULERS EN GUNICORN/RENDER
+    # Solo iniciamos el scheduler si:
+    # 1. Es local (no gunicorn) y es el proceso principal (WERKZEUG_RUN_MAIN)
+    # 2. Es Gunicorn y es el worker designado (IS_SCHEDULER_WORKER)
+    # ════════════════════════════════════════════════════════
+    is_gunicorn = "gunicorn" in os.environ.get("SERVER_SOFTWARE", "")
+    
+    if is_gunicorn:
+        if os.environ.get("IS_SCHEDULER_WORKER") == "True":
+            sync_service.start()
+            atexit.register(lambda: sync_service.shutdown())
+            app.logger.info("Scheduler iniciado en el Worker designado de Gunicorn.")
+    else:
+        # Modo local Flask (evitar doble ejecución por el reloader)
+        if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+            sync_service.start()
+            atexit.register(lambda: sync_service.shutdown())
+            app.logger.info("Scheduler iniciado en modo desarrollo local.")
 
     # --- Registrar Controladores (Blueprints) ---
     from app.controllers.system_controller import system_bp
