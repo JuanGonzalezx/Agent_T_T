@@ -7,9 +7,11 @@ Maneja 3 sub-flujos:
   3. Cancelar cita: Confirma cancelación → actualiza estado
 
 Costo de tokens: 0 (respuestas determinísticas)
+
+Incluye tracking de sesión in-memory para mantener contexto
+entre mensajes consecutivos del flujo de citas.
 """
 
-import re
 import logging
 from datetime import datetime, timedelta
 from langchain_core.messages import AIMessage
@@ -20,12 +22,78 @@ logger = logging.getLogger(__name__)
 # Días de la semana en español
 DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
 
+# ═══════════════════════════════════════════════════════════════
+# SESIÓN IN-MEMORY: Tracking del flujo conversacional de citas
+# ═══════════════════════════════════════════════════════════════
+# Cuando el bot muestra horarios y pide descripción, guardamos
+# el teléfono aquí. Así el router sabe que el próximo mensaje
+# de este usuario DEBE ir al nodo de citas (no a STATUS/HORARIO/etc).
+_cita_sessions = {}  # phone_clean -> {"step": str, "timestamp": datetime}
+
+SESSION_TTL_SECONDS = 300  # 5 minutos de timeout
+
+
+def _clean_phone(phone: str) -> str:
+    """Normaliza el teléfono para usar como key."""
+    return phone.replace('+', '').replace(' ', '').replace('-', '')
+
+
+def has_active_cita_session(phone: str) -> bool:
+    """
+    Verifica si un teléfono tiene una sesión de cita activa.
+    
+    Llamado por el router para saber si el siguiente mensaje
+    debe ir al nodo de citas sin importar sus keywords.
+    """
+    phone_clean = _clean_phone(phone)
+    session = _cita_sessions.get(phone_clean)
+    
+    if not session:
+        return False
+    
+    # Verificar TTL
+    elapsed = (datetime.now() - session['timestamp']).total_seconds()
+    if elapsed > SESSION_TTL_SECONDS:
+        del _cita_sessions[phone_clean]
+        logger.info(f"[CITAS] Sesión expirada para {phone_clean}")
+        return False
+    
+    return True
+
+
+def _set_session(phone: str, step: str):
+    """Marca que un teléfono está en medio del flujo de citas."""
+    phone_clean = _clean_phone(phone)
+    _cita_sessions[phone_clean] = {
+        'step': step,
+        'timestamp': datetime.now()
+    }
+    logger.info(f"[CITAS] Sesión creada: {phone_clean} → {step}")
+
+
+def _clear_session(phone: str):
+    """Limpia la sesión de citas de un teléfono."""
+    phone_clean = _clean_phone(phone)
+    if phone_clean in _cita_sessions:
+        del _cita_sessions[phone_clean]
+        logger.info(f"[CITAS] Sesión limpiada: {phone_clean}")
+
+
+def _get_session_step(phone: str) -> str:
+    """Obtiene el paso actual de la sesión."""
+    phone_clean = _clean_phone(phone)
+    session = _cita_sessions.get(phone_clean)
+    if session:
+        return session.get('step', '')
+    return ''
+
 
 def citas_node(state: AgentState):
     """
     Nodo principal de gestión de citas desde WhatsApp.
 
     Detecta el sub-intent del usuario y responde apropiadamente.
+    Usa sesiones in-memory para mantener contexto entre mensajes.
     """
     from app import db_handler
 
@@ -47,13 +115,14 @@ def citas_node(state: AgentState):
 
     text_lower = text.lower()
 
-    logger.info(f"[CITAS] Procesando: '{text}' de {phone}")
+    logger.info(f"[CITAS] Procesando: '{text}' de {phone} (sesión: {_get_session_step(phone)})")
 
     # ──────────────────────────────────────────────
     # Sub-intent: CANCELAR CITA
     # ──────────────────────────────────────────────
     cancelar_patterns = ['cancelar cita', 'cancelar mi cita', 'anular cita', 'no quiero la cita']
     if any(p in text_lower for p in cancelar_patterns):
+        _clear_session(phone)
         return _handle_cancelar_cita(db_handler, phone, name)
 
     # ──────────────────────────────────────────────
@@ -62,15 +131,25 @@ def citas_node(state: AgentState):
     estado_patterns = ['estado de mi cita', 'mi cita', 'tengo cita', 'cómo va mi cita',
                        'como va mi cita', 'estado cita', 'ver mi cita', 'consultar cita']
     if any(p in text_lower for p in estado_patterns):
+        _clear_session(phone)
         return _handle_consultar_cita(db_handler, phone, name)
+
+    # ──────────────────────────────────────────────
+    # SESIÓN ACTIVA: Usuario respondiendo a "envía el motivo"
+    # ──────────────────────────────────────────────
+    current_step = _get_session_step(phone)
+
+    if current_step == 'awaiting_description':
+        # El usuario está respondiendo con la descripción de la cita
+        # NO importa qué keywords tenga, es la descripción
+        _clear_session(phone)
+        return _handle_crear_cita_directa(db_handler, phone, name, text)
 
     # ──────────────────────────────────────────────
     # Sub-intent: AGENDAR NUEVA CITA
     # ──────────────────────────────────────────────
-    # Si el mensaje contiene una descripción larga (>10 chars), es la solicitud directa
-    # Si no, mostramos el menú de citas
     agendar_patterns = ['agendar cita', 'solicitar cita', 'pedir cita', 'necesito cita',
-                        'quiero una cita', 'reservar cita', 'bienestar', 'cita psicolog',
+                        'quiero una cita', 'reservar cita', 'cita psicolog',
                         'cita con', 'agendar', 'reunión', 'reunion']
 
     if any(p in text_lower for p in agendar_patterns):
@@ -94,15 +173,23 @@ def citas_node(state: AgentState):
             msg += "Si deseas cancelarla, escribe *cancelar cita*."
             return {"messages": [AIMessage(content=msg)]}
 
-        # Mostrar horarios disponibles y pedir descripción
+        # Intentar extraer descripción del mismo mensaje
+        # Ej: "agendar cita para cambio de horario"
+        descripcion_inline = _extract_inline_description(text)
+        if descripcion_inline:
+            # Crear cita directamente con la descripción inline
+            return _handle_crear_cita_directa(db_handler, phone, name, descripcion_inline)
+
+        # Mostrar horarios y pedir descripción
+        # MARCAR SESIÓN para que el siguiente mensaje venga aquí
         return _handle_solicitar_cita(db_handler, phone, name)
 
     # ──────────────────────────────────────────────
-    # MENSAJE CON DESCRIPCIÓN (flujo de solicitud en curso)
+    # Si llegamos aquí es porque el router envió al nodo CITA
+    # pero el mensaje no es un comando específico.
+    # Tratar como descripción para crear cita directa.
     # ──────────────────────────────────────────────
-    # Si llega un texto que no matchea ningún pattern específico
-    # y tiene más de 10 caracteres, intentamos crear la cita
-    if len(text) > 10:
+    if len(text) > 8:
         return _handle_crear_cita_directa(db_handler, phone, name, text)
 
     # Default: menú de citas
@@ -116,6 +203,34 @@ def citas_node(state: AgentState):
         f"3️⃣ Escribe *cancelar cita* para anular\n"
     )
     return {"messages": [AIMessage(content=msg)]}
+
+
+def _extract_inline_description(text: str) -> str:
+    """
+    Extrae la descripción de una cita si viene inline en el mensaje.
+    Ej: "agendar cita para cambio de horario" → "cambio de horario"
+    Ej: "agendar cita: necesito ayuda" → "necesito ayuda"
+    """
+    text_lower = text.lower()
+    
+    # Patrones para separar el comando de la descripción
+    separators = [
+        'agendar cita para ', 'agendar cita: ', 'agendar cita, ',
+        'solicitar cita para ', 'solicitar cita: ',
+        'pedir cita para ', 'pedir cita: ',
+        'necesito cita para ', 'necesito cita: ',
+        'quiero una cita para ', 'quiero una cita: ',
+        'reservar cita para ', 'reservar cita: ',
+    ]
+    
+    for sep in separators:
+        idx = text_lower.find(sep)
+        if idx != -1:
+            description = text[idx + len(sep):].strip()
+            if len(description) > 5:  # Mínimo 5 chars de descripción
+                return description
+    
+    return ''
 
 
 def _handle_solicitar_cita(db_handler, phone, name):
@@ -142,6 +257,9 @@ def _handle_solicitar_cita(db_handler, phone, name):
             h_inicio = h.get('hora_inicio', '')
             h_fin = h.get('hora_fin', '')
             horarios_txt += f"  📌 *{dia_nombre}*: {h_inicio} - {h_fin}\n"
+
+    # ✅ MARCAR SESIÓN: el siguiente mensaje será la descripción
+    _set_session(phone, 'awaiting_description')
 
     msg = (
         f"📅 *Agendar Cita*\n\n"

@@ -68,6 +68,31 @@ def router(state: AgentState):
                 return {"intent": "CONFIRM"}
     
     # ==========================================================
+    # 📅 PRIORIDAD 0.5: Sesión de citas activa
+    # ==========================================================
+    # Si el usuario está en medio del flujo de citas (ya le mostramos
+    # los horarios y está enviando la descripción), SIEMPRE va a CITA
+    # sin importar qué keywords tenga su mensaje.
+    from app.agent.nodes.citas import has_active_cita_session
+    
+    phone = state.get('phone', '')
+    if has_active_cita_session(phone):
+        logger.info("[ROUTER] Sesión de cita activa → CITA (bypass keywords)")
+        return {"intent": "CITA"}
+    
+    # ==========================================================
+    # 📅 PRIORIDAD 1: CITAS - Keywords explícitas (ANTES de todo)
+    # ==========================================================
+    # Se evalúa PRIMERO para evitar que "matrícula", "horario", etc.
+    # roben mensajes que son parte del flujo de agendamiento.
+    cita_keywords = ['cita', 'agendar', 'agendar cita', 'cancelar cita', 'estado cita',
+                     'mi cita', 'bienestar', 'psicolog', 'reunión', 'reunion',
+                     'solicitar cita', 'pedir cita', 'reservar cita']
+    if any(kw in last_msg for kw in cita_keywords):
+        logger.info("[ROUTER] Fast-Path: CITA (sin IA)")
+        return {"intent": "CITA"}
+
+    # ==========================================================
     # 🔒 REGLA DE ORO: Modo "Confirmación" por estado académico
     # ==========================================================
     student_data = state.get('student_data')
@@ -169,14 +194,6 @@ def router(state: AgentState):
     if any(kw in last_msg for kw in info_contacto):
         logger.info("[ROUTER] Fast-Path: INFO_CONTACTO (sin IA)")
         return {"intent": "INFO_CONTACTO"}
-    
-    # CITAS - módulo de agendamiento (sin IA)
-    cita_keywords = ['cita', 'agendar', 'agendar cita', 'cancelar cita', 'estado cita',
-                     'mi cita', 'bienestar', 'psicolog', 'reunión', 'reunion',
-                     'solicitar cita', 'pedir cita', 'reservar cita']
-    if any(kw in last_msg for kw in cita_keywords):
-        logger.info("[ROUTER] Fast-Path: CITA (sin IA)")
-        return {"intent": "CITA"}
 
     # ==========================================================
     # 🧠 SOLO para consultas MUY ESPECÍFICAS: Usamos Gemini
