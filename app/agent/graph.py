@@ -85,9 +85,14 @@ def router(state: AgentState):
     # ==========================================================
     # Se evalúa PRIMERO para evitar que "matrícula", "horario", etc.
     # roben mensajes que son parte del flujo de agendamiento.
-    cita_keywords = ['cita', 'agendar', 'agendar cita', 'cancelar cita', 'estado cita',
-                     'mi cita', 'bienestar', 'psicolog', 'reunión', 'reunion',
-                     'solicitar cita', 'pedir cita', 'reservar cita']
+    cita_keywords = [
+        'cita', 'agendar', 'agendar cita', 'cancelar cita', 'estado cita',
+        'mi cita', 'bienestar', 'psicolog', 'reunión', 'reunion',
+        'solicitar cita', 'pedir cita', 'reservar cita',
+        'quisiera cancelar', 'quiero cancelar', 'me gustaria cancelar',
+        'me gustaría cancelar', 'consultar cita', 'ver cita',
+        'estado de mi cita', 'estado de una cita',
+    ]
     if any(kw in last_msg for kw in cita_keywords):
         logger.info("[ROUTER] Fast-Path: CITA (sin IA)")
         return {"intent": "CITA"}

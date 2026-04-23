@@ -2,98 +2,184 @@
 Nodo de agendamiento de citas vía WhatsApp.
 
 Maneja 3 sub-flujos:
-  1. Agendar cita: Pide descripción → muestra horarios → crea cita PENDIENTE
-  2. Consultar estado: Busca citas del estudiante → muestra estado
-  3. Cancelar cita: Confirma cancelación → actualiza estado
+  1. Agendar cita: Muestra slots numerados → usuario elige → pide motivo → Gemini extrae → crea cita
+  2. Consultar estado: Busca la cita activa del estudiante
+  3. Cancelar cita: Cancela la cita activa
 
-Costo de tokens: 0 (respuestas determinísticas)
+Regla clave: cada usuario solo puede tener UNA cita activa (PENDIENTE o CONFIRMADA).
 
-Incluye tracking de sesión in-memory para mantener contexto
-entre mensajes consecutivos del flujo de citas.
+Usa sesiones in-memory para mantener contexto entre mensajes y Gemini para
+extraer el motivo limpio de mensajes del usuario.
 """
 
 import logging
 from datetime import datetime, timedelta
 from langchain_core.messages import AIMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from app.agent.state import AgentState
+from app.utils.gemini_logger import invoke_with_logging
 
 logger = logging.getLogger(__name__)
 
-# Días de la semana en español
 DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+SLOT_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣']
 
 # ═══════════════════════════════════════════════════════════════
-# SESIÓN IN-MEMORY: Tracking del flujo conversacional de citas
+# SESIÓN IN-MEMORY
 # ═══════════════════════════════════════════════════════════════
-# Cuando el bot muestra horarios y pide descripción, guardamos
-# el teléfono aquí. Así el router sabe que el próximo mensaje
-# de este usuario DEBE ir al nodo de citas (no a STATUS/HORARIO/etc).
-_cita_sessions = {}  # phone_clean -> {"step": str, "timestamp": datetime}
+_cita_sessions = {}   # phone_clean -> {step, timestamp, extra}
+SESSION_TTL_SECONDS = 300  # 5 minutos
 
-SESSION_TTL_SECONDS = 300  # 5 minutos de timeout
+# ═══════════════════════════════════════════════════════════════
+# LLM para extracción de motivo
+# ═══════════════════════════════════════════════════════════════
+_cita_llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash-lite",
+    temperature=0.0,
+    max_tokens=60,
+    timeout=15,
+    max_retries=1,
+)
 
+
+# ─── Utilidades de sesión ────────────────────────────────────
 
 def _clean_phone(phone: str) -> str:
-    """Normaliza el teléfono para usar como key."""
     return phone.replace('+', '').replace(' ', '').replace('-', '')
 
 
 def has_active_cita_session(phone: str) -> bool:
-    """
-    Verifica si un teléfono tiene una sesión de cita activa.
-    
-    Llamado por el router para saber si el siguiente mensaje
-    debe ir al nodo de citas sin importar sus keywords.
-    """
+    """Llamado por el router para decidir si el mensaje va al nodo citas."""
     phone_clean = _clean_phone(phone)
     session = _cita_sessions.get(phone_clean)
-    
     if not session:
         return False
-    
-    # Verificar TTL
     elapsed = (datetime.now() - session['timestamp']).total_seconds()
     if elapsed > SESSION_TTL_SECONDS:
         del _cita_sessions[phone_clean]
         logger.info(f"[CITAS] Sesión expirada para {phone_clean}")
         return False
-    
     return True
 
 
-def _set_session(phone: str, step: str):
-    """Marca que un teléfono está en medio del flujo de citas."""
+def _set_session(phone: str, step: str, extra: dict = None):
     phone_clean = _clean_phone(phone)
     _cita_sessions[phone_clean] = {
         'step': step,
-        'timestamp': datetime.now()
+        'timestamp': datetime.now(),
+        'extra': extra or {}
     }
-    logger.info(f"[CITAS] Sesión creada: {phone_clean} → {step}")
+    logger.info(f"[CITAS] Sesión: {phone_clean} → {step}")
 
 
 def _clear_session(phone: str):
-    """Limpia la sesión de citas de un teléfono."""
     phone_clean = _clean_phone(phone)
-    if phone_clean in _cita_sessions:
-        del _cita_sessions[phone_clean]
-        logger.info(f"[CITAS] Sesión limpiada: {phone_clean}")
+    _cita_sessions.pop(phone_clean, None)
+    logger.info(f"[CITAS] Sesión limpiada: {phone_clean}")
 
 
-def _get_session_step(phone: str) -> str:
-    """Obtiene el paso actual de la sesión."""
+def _get_session(phone: str) -> dict:
     phone_clean = _clean_phone(phone)
-    session = _cita_sessions.get(phone_clean)
-    if session:
-        return session.get('step', '')
-    return ''
+    return _cita_sessions.get(phone_clean, {})
 
+
+# ─── Detección de intención interna (más amplia) ─────────────
+
+def _is_cancel_intent(text_lower: str) -> bool:
+    """Detecta intención de cancelar con patterns amplios."""
+    # "cancelar cita", "cancelar mi cita", "quisiera cancelar una cita",
+    # "quiero cancelar", "me gustaria cancelar", etc.
+    return 'cancelar' in text_lower
+
+
+def _is_status_intent(text_lower: str) -> bool:
+    """Detecta intención de consultar estado."""
+    status_words = ['estado', 'consultar', 'ver mi', 'revisar',
+                    'como va', 'cómo va', 'tengo cita',
+                    'mi cita', 'ver cita', 'cuál es mi cita']
+    return any(w in text_lower for w in status_words) and 'cita' in text_lower
+
+
+# ─── Generación de slots ────────────────────────────────────
+
+def _generate_slots(horarios: list) -> list:
+    """
+    A partir de la config de horarios, genera slots individuales
+    con fecha concreta para los próximos 14 días.
+    Retorna máximo 6 slots.
+    """
+    slots = []
+    hoy = datetime.now()
+
+    for dias_adelante in range(1, 15):
+        fecha = hoy + timedelta(days=dias_adelante)
+        dia_semana = fecha.weekday()  # 0=Lunes
+
+        for h in horarios:
+            h_dia = int(h.get('dia_semana', -1))
+            if h_dia != dia_semana or not int(h.get('activo', 0)):
+                continue
+
+            h_inicio = h.get('hora_inicio', '08:00')
+            h_fin = h.get('hora_fin', '12:00')
+            duracion = int(h.get('duracion_minutos', 30))
+
+            # Generar slots individuales dentro de la franja
+            inicio_parts = h_inicio.split(':')
+            fin_parts = h_fin.split(':')
+            current_min = int(inicio_parts[0]) * 60 + int(inicio_parts[1])
+            fin_min = int(fin_parts[0]) * 60 + int(fin_parts[1])
+
+            while current_min + duracion <= fin_min and len(slots) < 6:
+                hora = f"{current_min // 60:02d}:{current_min % 60:02d}"
+                slots.append({
+                    'dia': DIAS_SEMANA[dia_semana],
+                    'fecha': fecha.strftime('%Y-%m-%d'),
+                    'hora': hora,
+                    'duracion': duracion,
+                })
+                current_min += duracion
+
+        if len(slots) >= 6:
+            break
+
+    return slots
+
+
+# ─── Extracción de motivo con Gemini ─────────────────────────
+
+def _extract_motivo_with_llm(text: str) -> str:
+    """Usa Gemini para extraer un motivo limpio y corto."""
+    try:
+        prompt = (
+            "Del siguiente mensaje, extrae SOLO el motivo o razón "
+            "por la que el estudiante quiere una cita. "
+            "Responde en máximo 12 palabras, sin comillas. "
+            "Ignora referencias a horarios, días u horas. "
+            "Si no hay motivo claro, responde: Consulta general\n\n"
+            f"Mensaje: \"{text}\"\n"
+            "Motivo:"
+        )
+        response = invoke_with_logging(_cita_llm, prompt, context="CITAS_MOTIVO")
+        motivo = response.content.strip().strip('"').strip("'").strip()
+        # Limpieza extra
+        motivo = motivo.replace("Motivo:", "").strip()
+        if len(motivo) < 3 or motivo.lower() in ('ninguno', 'n/a', 'no hay'):
+            motivo = "Consulta general"
+        return motivo[:100]
+    except Exception as e:
+        logger.error(f"[CITAS] Error LLM motivo: {e}")
+        # Fallback: intentar limpiar manualmente
+        return text[:80] if len(text) > 5 else "Consulta general"
+
+
+# ═══════════════════════════════════════════════════════════════
+# NODO PRINCIPAL
+# ═══════════════════════════════════════════════════════════════
 
 def citas_node(state: AgentState):
     """
-    Nodo principal de gestión de citas desde WhatsApp.
-
-    Detecta el sub-intent del usuario y responde apropiadamente.
-    Usa sesiones in-memory para mantener contexto entre mensajes.
+    Nodo principal. Detecta sub-intent y maneja flujo con sesiones.
     """
     from app import db_handler
 
@@ -104,7 +190,6 @@ def citas_node(state: AgentState):
     if not messages:
         return {"messages": [AIMessage(content="No recibí tu mensaje.")]}
 
-    # Obtener texto del último mensaje
     last_message = messages[-1]
     if hasattr(last_message, 'content'):
         text = last_message.content.strip()
@@ -114,305 +199,256 @@ def citas_node(state: AgentState):
         text = str(last_message).strip()
 
     text_lower = text.lower()
+    session = _get_session(phone)
+    current_step = session.get('step', '')
 
-    logger.info(f"[CITAS] Procesando: '{text}' de {phone} (sesión: {_get_session_step(phone)})")
+    logger.info(f"[CITAS] '{text}' | phone={phone} | step={current_step}")
 
     # ──────────────────────────────────────────────
-    # Sub-intent: CANCELAR CITA
+    # 1. CANCELAR (siempre se evalúa primero)
     # ──────────────────────────────────────────────
-    cancelar_patterns = ['cancelar cita', 'cancelar mi cita', 'anular cita', 'no quiero la cita']
-    if any(p in text_lower for p in cancelar_patterns):
+    if _is_cancel_intent(text_lower):
         _clear_session(phone)
-        return _handle_cancelar_cita(db_handler, phone, name)
+        return _handle_cancelar(db_handler, phone, name)
 
     # ──────────────────────────────────────────────
-    # Sub-intent: CONSULTAR ESTADO DE CITA
+    # 2. CONSULTAR ESTADO
     # ──────────────────────────────────────────────
-    estado_patterns = ['estado de mi cita', 'mi cita', 'tengo cita', 'cómo va mi cita',
-                       'como va mi cita', 'estado cita', 'ver mi cita', 'consultar cita']
-    if any(p in text_lower for p in estado_patterns):
+    if _is_status_intent(text_lower):
         _clear_session(phone)
-        return _handle_consultar_cita(db_handler, phone, name)
+        return _handle_consultar(db_handler, phone, name)
 
     # ──────────────────────────────────────────────
-    # SESIÓN ACTIVA: Usuario respondiendo a "envía el motivo"
+    # 3. SESIÓN: Esperando selección de slot
     # ──────────────────────────────────────────────
-    current_step = _get_session_step(phone)
+    if current_step == 'awaiting_slot':
+        slots = session.get('extra', {}).get('slots', [])
+        return _handle_slot_selection(db_handler, phone, name, text, slots)
 
-    if current_step == 'awaiting_description':
-        # El usuario está respondiendo con la descripción de la cita
-        # NO importa qué keywords tenga, es la descripción
+    # ──────────────────────────────────────────────
+    # 4. SESIÓN: Esperando motivo
+    # ──────────────────────────────────────────────
+    if current_step == 'awaiting_motivo':
+        slot = session.get('extra', {}).get('selected_slot', {})
         _clear_session(phone)
-        return _handle_crear_cita_directa(db_handler, phone, name, text)
+        motivo = _extract_motivo_with_llm(text)
+        return _create_cita(db_handler, phone, name, slot, motivo)
 
     # ──────────────────────────────────────────────
-    # Sub-intent: AGENDAR NUEVA CITA
+    # 5. AGENDAR (intento nuevo o genérico)
     # ──────────────────────────────────────────────
-    agendar_patterns = ['agendar cita', 'solicitar cita', 'pedir cita', 'necesito cita',
-                        'quiero una cita', 'reservar cita', 'cita psicolog',
-                        'cita con', 'agendar', 'reunión', 'reunion']
+    # Constraint: solo 1 cita activa por usuario
+    cita_existente = db_handler.get_cita_pendiente_by_phone(phone)
+    if cita_existente:
+        return _show_existing_cita(cita_existente)
 
-    if any(p in text_lower for p in agendar_patterns):
-        # Verificar si ya tiene una cita pendiente
-        cita_pendiente = db_handler.get_cita_pendiente_by_phone(phone)
-        if cita_pendiente:
-            estado = cita_pendiente.get('estado', 'PENDIENTE')
-            fecha = cita_pendiente.get('fecha_cita', 'N/A')
-            hora = cita_pendiente.get('hora_cita', 'N/A')
-            msg = (
-                f"📋 Ya tienes una cita *{estado}*:\n\n"
-                f"📅 Fecha: *{fecha}*\n"
-                f"🕐 Hora: *{hora}*\n"
-                f"📝 Motivo: {cita_pendiente.get('descripcion', 'N/A')}\n\n"
-            )
-            if estado == 'PENDIENTE':
-                msg += "⏳ Estamos revisando tu solicitud. Te notificaremos pronto.\n\n"
-            elif estado == 'CONFIRMADA':
-                msg += "✅ Tu cita está confirmada. ¡No olvides asistir!\n\n"
+    # Mostrar slots disponibles
+    return _show_slots(db_handler, phone)
 
-            msg += "Si deseas cancelarla, escribe *cancelar cita*."
-            return {"messages": [AIMessage(content=msg)]}
 
-        # Intentar extraer descripción del mismo mensaje
-        # Ej: "agendar cita para cambio de horario"
-        descripcion_inline = _extract_inline_description(text)
-        if descripcion_inline:
-            # Crear cita directamente con la descripción inline
-            return _handle_crear_cita_directa(db_handler, phone, name, descripcion_inline)
+# ═══════════════════════════════════════════════════════════════
+# HANDLERS
+# ═══════════════════════════════════════════════════════════════
 
-        # Mostrar horarios y pedir descripción
-        # MARCAR SESIÓN para que el siguiente mensaje venga aquí
-        return _handle_solicitar_cita(db_handler, phone, name)
+def _show_existing_cita(cita: dict) -> dict:
+    """Muestra la cita activa del usuario (constraint 1 cita)."""
+    estado = cita.get('estado', 'PENDIENTE')
+    fecha = cita.get('fecha_cita', 'N/A')
+    hora = cita.get('hora_cita', 'N/A')
+    desc = cita.get('descripcion', 'N/A')
 
-    # ──────────────────────────────────────────────
-    # Si llegamos aquí es porque el router envió al nodo CITA
-    # pero el mensaje no es un comando específico.
-    # Tratar como descripción para crear cita directa.
-    # ──────────────────────────────────────────────
-    if len(text) > 8:
-        return _handle_crear_cita_directa(db_handler, phone, name, text)
-
-    # Default: menú de citas
     msg = (
-        f"📅 *Módulo de Citas*\n\n"
-        f"Hola{' ' + name if name != 'Estudiante' else ''}, "
-        f"¿qué deseas hacer?\n\n"
-        f"1️⃣ Escribe *agendar cita* + motivo\n"
-        f"   Ej: _\"Agendar cita: necesito asesoría sobre mi matrícula\"_\n\n"
-        f"2️⃣ Escribe *estado cita* para consultar\n\n"
-        f"3️⃣ Escribe *cancelar cita* para anular\n"
+        f"📋 Ya tienes una cita *{estado}*:\n\n"
+        f"📅 Fecha: *{fecha}*\n"
+        f"🕐 Hora: *{hora}*\n"
+        f"📝 Motivo: _{desc}_\n\n"
     )
+    if estado == 'PENDIENTE':
+        msg += "⏳ Estamos revisando tu solicitud. Te notificaremos pronto.\n\n"
+    elif estado == 'CONFIRMADA':
+        msg += "✅ Tu cita está confirmada. ¡No olvides asistir!\n\n"
+    msg += "Para cancelarla, escribe *cancelar cita*."
+
     return {"messages": [AIMessage(content=msg)]}
 
 
-def _extract_inline_description(text: str) -> str:
-    """
-    Extrae la descripción de una cita si viene inline en el mensaje.
-    Ej: "agendar cita para cambio de horario" → "cambio de horario"
-    Ej: "agendar cita: necesito ayuda" → "necesito ayuda"
-    """
-    text_lower = text.lower()
-    
-    # Patrones para separar el comando de la descripción
-    separators = [
-        'agendar cita para ', 'agendar cita: ', 'agendar cita, ',
-        'solicitar cita para ', 'solicitar cita: ',
-        'pedir cita para ', 'pedir cita: ',
-        'necesito cita para ', 'necesito cita: ',
-        'quiero una cita para ', 'quiero una cita: ',
-        'reservar cita para ', 'reservar cita: ',
-    ]
-    
-    for sep in separators:
-        idx = text_lower.find(sep)
-        if idx != -1:
-            description = text[idx + len(sep):].strip()
-            if len(description) > 5:  # Mínimo 5 chars de descripción
-                return description
-    
-    return ''
-
-
-def _handle_solicitar_cita(db_handler, phone, name):
-    """Muestra horarios disponibles e invita a describir el motivo."""
+def _show_slots(db_handler, phone: str) -> dict:
+    """Muestra slots numerados para que el usuario elija."""
     horarios = db_handler.get_horarios_disponibles(solo_activos=True)
 
     if not horarios:
-        msg = (
+        return {"messages": [AIMessage(content=(
             "📅 *Agendar Cita*\n\n"
-            "En este momento no hay horarios configurados para citas. 😕\n\n"
-            "Por favor contacta directamente a la secretaría o "
-            "intenta más tarde."
-        )
-        return {"messages": [AIMessage(content=msg)]}
+            "No hay horarios disponibles en este momento. 😕\n"
+            "Contacta directamente a la secretaría."
+        ))]}
 
-    # Formatear horarios disponibles
-    horarios_txt = ""
-    dias_vistos = set()
-    for h in horarios:
-        dia = int(h.get('dia_semana', 0))
-        dia_nombre = DIAS_SEMANA[dia] if 0 <= dia <= 6 else f"Día {dia}"
-        if dia_nombre not in dias_vistos:
-            dias_vistos.add(dia_nombre)
-            h_inicio = h.get('hora_inicio', '')
-            h_fin = h.get('hora_fin', '')
-            horarios_txt += f"  📌 *{dia_nombre}*: {h_inicio} - {h_fin}\n"
+    slots = _generate_slots(horarios)
 
-    # ✅ MARCAR SESIÓN: el siguiente mensaje será la descripción
-    _set_session(phone, 'awaiting_description')
+    if not slots:
+        return {"messages": [AIMessage(content=(
+            "📅 *Agendar Cita*\n\n"
+            "No hay horarios disponibles en los próximos días. 😕\n"
+            "Contacta directamente a la secretaría."
+        ))]}
+
+    # Formatear slots numerados
+    slots_txt = ""
+    for i, s in enumerate(slots):
+        slots_txt += f"{SLOT_EMOJIS[i]} *{s['dia']} {s['fecha']}* a las *{s['hora']}*\n"
+
+    # Marcar sesión
+    _set_session(phone, 'awaiting_slot', {'slots': slots})
 
     msg = (
         f"📅 *Agendar Cita*\n\n"
-        f"Horarios disponibles:\n{horarios_txt}\n"
-        f"Para agendar tu cita, envía un mensaje describiendo "
-        f"brevemente el motivo.\n\n"
-        f"📝 Ejemplo:\n"
-        f"_\"Necesito asesoría sobre mi proceso de matrícula\"_\n\n"
-        f"La secretaría revisará tu solicitud y te confirmará "
-        f"la fecha y hora exacta. 👍"
+        f"Horarios disponibles:\n{slots_txt}\n"
+        f"Envía el *número* del horario que prefieras.\n"
+        f"Ej: *1*"
     )
     return {"messages": [AIMessage(content=msg)]}
 
 
-def _handle_crear_cita_directa(db_handler, phone, name, descripcion):
-    """Crea una cita con la próxima fecha/hora disponible."""
-    # Buscar el próximo slot disponible
-    horarios = db_handler.get_horarios_disponibles(solo_activos=True)
+def _handle_slot_selection(db_handler, phone: str, name: str,
+                           text: str, slots: list) -> dict:
+    """Procesa la selección del slot por número."""
+    # Extraer número del mensaje
+    slot_num = None
+    text_stripped = text.strip()
 
-    if not horarios:
-        msg = (
-            "No hay horarios disponibles en este momento. 😕\n"
-            "Por favor contacta directamente a la secretaría."
-        )
-        return {"messages": [AIMessage(content=msg)]}
-
-    # Calcular próxima fecha disponible
-    hoy = datetime.now()
-    fecha_cita = None
-    hora_cita = None
-
-    for dias_adelante in range(1, 15):  # Buscar en los próximos 14 días
-        fecha_candidata = hoy + timedelta(days=dias_adelante)
-        dia_semana = fecha_candidata.weekday()  # 0=Lunes
-
-        for h in horarios:
-            h_dia = int(h.get('dia_semana', -1))
-            if h_dia == dia_semana and int(h.get('activo', 0)):
-                fecha_cita = fecha_candidata.strftime('%Y-%m-%d')
-                hora_cita = h.get('hora_inicio', '08:00')
-                break
-
-        if fecha_cita:
+    for i in range(1, min(7, len(slots) + 1)):
+        if str(i) in text_stripped:
+            slot_num = i
             break
 
-    if not fecha_cita:
+    if slot_num is None or slot_num > len(slots):
+        # No reconocido → mostrar slots de nuevo
+        slots_txt = ""
+        for i, s in enumerate(slots):
+            slots_txt += f"{SLOT_EMOJIS[i]} *{s['dia']} {s['fecha']}* a las *{s['hora']}*\n"
+
+        _set_session(phone, 'awaiting_slot', {'slots': slots})
         msg = (
-            "No encontré un horario disponible en los próximos días. 😕\n"
-            "Por favor contacta directamente a la secretaría."
+            f"⚠️ No reconocí tu selección.\n\n"
+            f"Elige un horario:\n{slots_txt}\n"
+            f"Envía solo el *número* (1-{len(slots)})"
         )
         return {"messages": [AIMessage(content=msg)]}
 
-    # Buscar estudiante_id (puede ser None si no está registrado)
-    estudiante_id = None
-    estudiantes = db_handler.get_estudiante_by_phone(phone)
-    if estudiantes:
-        est = estudiantes[0]
-        est_id = est.get('id')
-        if isinstance(est_id, dict):
-            estudiante_id = int(est_id.get('value', 0))
-        else:
-            estudiante_id = int(est_id) if est_id else None
+    selected = slots[slot_num - 1]
 
-    # Crear la cita
+    # Pedir motivo
+    _set_session(phone, 'awaiting_motivo', {'selected_slot': selected})
+
+    msg = (
+        f"📌 Seleccionaste: *{selected['dia']} {selected['fecha']}* "
+        f"a las *{selected['hora']}*\n\n"
+        f"Ahora, describe brevemente el *motivo* de tu cita.\n\n"
+        f"📝 Ej: _\"Necesito asesoría sobre mi proceso de matrícula\"_"
+    )
+    return {"messages": [AIMessage(content=msg)]}
+
+
+def _create_cita(db_handler, phone: str, name: str,
+                 slot: dict, motivo: str) -> dict:
+    """Crea la cita en la base de datos."""
+    # Buscar estudiante_id
+    estudiante_id = None
+    try:
+        estudiantes = db_handler.get_estudiante_by_phone(phone)
+        if estudiantes:
+            est = estudiantes[0]
+            est_id = est.get('id')
+            if isinstance(est_id, dict):
+                estudiante_id = int(est_id.get('value', 0))
+            else:
+                estudiante_id = int(est_id) if est_id else None
+    except Exception:
+        pass
+
     success, result = db_handler.insert_cita(
         estudiante_id=estudiante_id,
         telefono=phone,
         nombre=name if name != 'Estudiante' else phone,
-        descripcion=descripcion,
-        fecha_cita=fecha_cita,
-        hora_cita=hora_cita
+        descripcion=motivo,
+        fecha_cita=slot.get('fecha', ''),
+        hora_cita=slot.get('hora', ''),
+        duracion=slot.get('duracion', 30)
     )
 
     if success:
-        # Formatear fecha legible
-        fecha_obj = datetime.strptime(fecha_cita, '%Y-%m-%d')
-        dia_nombre = DIAS_SEMANA[fecha_obj.weekday()]
-
         msg = (
             f"✅ *Solicitud de Cita Registrada*\n\n"
             f"👤 Nombre: *{name}*\n"
-            f"📅 Fecha tentativa: *{dia_nombre} {fecha_cita}*\n"
-            f"🕐 Hora tentativa: *{hora_cita}*\n"
-            f"📝 Motivo: _{descripcion}_\n\n"
+            f"📅 Fecha: *{slot['dia']} {slot['fecha']}*\n"
+            f"🕐 Hora: *{slot['hora']}*\n"
+            f"📝 Motivo: _{motivo}_\n\n"
             f"⏳ Tu cita está *PENDIENTE* de confirmación.\n"
-            f"La secretaría revisará disponibilidad y te notificará "
-            f"por este medio.\n\n"
-            f"Si necesitas cancelar, escribe *cancelar cita*."
+            f"La secretaría te notificará por este medio.\n\n"
+            f"Para cancelar, escribe *cancelar cita*."
         )
         logger.info(f"[CITAS] Cita #{result} creada para {phone}")
     else:
         msg = (
             "Hubo un problema al registrar tu cita. 😕\n"
-            "Por favor intenta de nuevo en unos minutos."
+            "Intenta de nuevo en unos minutos."
         )
-        logger.error(f"[CITAS] Error creando cita: {result}")
+        logger.error(f"[CITAS] Error: {result}")
 
     return {"messages": [AIMessage(content=msg)]}
 
 
-def _handle_consultar_cita(db_handler, phone, name):
-    """Consulta las citas del estudiante."""
-    citas = db_handler.get_citas_by_phone(phone)
-
-    if not citas:
-        msg = (
-            f"No tienes citas registradas en este momento.\n\n"
-            f"Si deseas agendar una, escribe *agendar cita*."
-        )
-        return {"messages": [AIMessage(content=msg)]}
-
-    msg = f"📋 *Tus Citas*\n\n"
-
-    estados_emoji = {
-        'PENDIENTE': '⏳',
-        'CONFIRMADA': '✅',
-        'RECHAZADA': '❌',
-        'CANCELADA': '🚫',
-        'COMPLETADA': '✔️'
-    }
-
-    for i, cita in enumerate(citas[:5], 1):  # Máximo 5 citas
-        estado = cita.get('estado', 'PENDIENTE')
-        emoji = estados_emoji.get(estado, '📋')
-        fecha = cita.get('fecha_cita', 'N/A')
-        hora = cita.get('hora_cita', 'N/A')
-        desc = cita.get('descripcion', 'Sin descripción')
-
-        msg += (
-            f"{emoji} *Cita #{cita.get('id', i)}*\n"
-            f"   📅 {fecha} a las {hora}\n"
-            f"   📝 {desc[:50]}{'...' if len(desc) > 50 else ''}\n"
-            f"   Estado: *{estado}*\n"
-        )
-        if estado == 'RECHAZADA' and cita.get('motivo_rechazo'):
-            msg += f"   💬 Motivo: {cita.get('motivo_rechazo')}\n"
-        msg += "\n"
-
-    msg += "Para cancelar una cita, escribe *cancelar cita*."
-
-    return {"messages": [AIMessage(content=msg)]}
-
-
-def _handle_cancelar_cita(db_handler, phone, name):
-    """Cancela la cita pendiente o confirmada más reciente del estudiante."""
+def _handle_consultar(db_handler, phone: str, name: str) -> dict:
+    """Consulta la cita activa del estudiante."""
     cita = db_handler.get_cita_pendiente_by_phone(phone)
 
     if not cita:
-        msg = (
+        # Buscar historial completo
+        citas_all = db_handler.get_citas_by_phone(phone)
+        if not citas_all:
+            return {"messages": [AIMessage(content=(
+                "No tienes citas registradas.\n\n"
+                "Para agendar una, escribe *agendar cita*."
+            ))]}
+
+        # Mostrar la más reciente
+        cita = citas_all[0]
+
+    estado = cita.get('estado', 'PENDIENTE')
+    estados_emoji = {
+        'PENDIENTE': '⏳', 'CONFIRMADA': '✅', 'RECHAZADA': '❌',
+        'CANCELADA': '🚫', 'COMPLETADA': '✔️'
+    }
+    emoji = estados_emoji.get(estado, '📋')
+
+    msg = (
+        f"📋 *Tu Cita*\n\n"
+        f"{emoji} Estado: *{estado}*\n"
+        f"📅 Fecha: *{cita.get('fecha_cita', 'N/A')}*\n"
+        f"🕐 Hora: *{cita.get('hora_cita', 'N/A')}*\n"
+        f"📝 Motivo: _{cita.get('descripcion', 'N/A')}_\n"
+    )
+
+    if estado == 'RECHAZADA' and cita.get('motivo_rechazo'):
+        msg += f"💬 Motivo rechazo: {cita.get('motivo_rechazo')}\n"
+
+    if estado in ('PENDIENTE', 'CONFIRMADA'):
+        msg += "\nPara cancelar, escribe *cancelar cita*."
+    else:
+        msg += "\nPara agendar una nueva, escribe *agendar cita*."
+
+    return {"messages": [AIMessage(content=msg)]}
+
+
+def _handle_cancelar(db_handler, phone: str, name: str) -> dict:
+    """Cancela la cita activa (PENDIENTE o CONFIRMADA)."""
+    cita = db_handler.get_cita_pendiente_by_phone(phone)
+
+    if not cita:
+        return {"messages": [AIMessage(content=(
             "No tienes citas pendientes o confirmadas para cancelar.\n\n"
-            "Si deseas agendar una nueva, escribe *agendar cita*."
-        )
-        return {"messages": [AIMessage(content=msg)]}
+            "Para agendar una nueva, escribe *agendar cita*."
+        ))]}
 
     cita_id = cita.get('id')
     if isinstance(cita_id, dict):
@@ -420,20 +456,20 @@ def _handle_cancelar_cita(db_handler, phone, name):
     else:
         cita_id = int(cita_id)
 
-    success, msg_result = db_handler.cancelar_cita(cita_id)
+    success, _ = db_handler.cancelar_cita(cita_id)
 
     if success:
         msg = (
             f"🚫 *Cita Cancelada*\n\n"
-            f"Tu cita del {cita.get('fecha_cita', '')} "
-            f"a las {cita.get('hora_cita', '')} ha sido cancelada.\n\n"
-            f"Si necesitas reagendar, escribe *agendar cita*."
+            f"Tu cita del *{cita.get('fecha_cita', '')}* "
+            f"a las *{cita.get('hora_cita', '')}* ha sido cancelada.\n\n"
+            f"Si deseas reagendar, escribe *agendar cita*."
         )
         logger.info(f"[CITAS] Cita #{cita_id} cancelada por {phone}")
     else:
         msg = (
             "No se pudo cancelar tu cita en este momento. 😕\n"
-            "Por favor intenta de nuevo."
+            "Intenta de nuevo."
         )
 
     return {"messages": [AIMessage(content=msg)]}
