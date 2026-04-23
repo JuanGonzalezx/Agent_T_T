@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Deploy-Render-46E3B7" alt="Render">
 </p>
 
-Backend Flask con agente conversacional de IA (LangGraph + Gemini 2.5 Flash Lite) que funciona como asistente virtual de WhatsApp para el programa **Talento Tech** del MinTIC (Colombia). Gestiona matrículas, confirmación de eventos, envíos masivos por campañas, importación de datos desde Google Drive, y consultas automáticas de estudiantes con respuestas determinísticas de costo cero en IA.
+Backend Flask con agente conversacional de IA (LangGraph + Gemini 2.5 Flash Lite) que funciona como asistente virtual de WhatsApp para el programa **Talento Tech** del MinTIC (Colombia). Gestiona matrículas, confirmación de eventos, captación de interesados, envíos masivos por campañas multi-tipo, importación de datos desde Google Drive, y consultas automáticas de estudiantes con respuestas determinísticas de costo cero en IA.
 
 ---
 
@@ -23,6 +23,7 @@ Backend Flask con agente conversacional de IA (LangGraph + Gemini 2.5 Flash Lite
 - [Agente IA — Grafo LangGraph](#-agente-ia--grafo-langgraph)
 - [Base de Datos](#-base-de-datos)
 - [Protección de Datos en Upload](#-protección-de-datos-en-upload)
+- [Sistema de Campañas Multi-Tipo](#-sistema-de-campañas-multi-tipo)
 - [Requisitos Previos](#-requisitos-previos)
 - [Instalación](#-instalación)
 - [Configuración](#-configuración)
@@ -33,6 +34,7 @@ Backend Flask con agente conversacional de IA (LangGraph + Gemini 2.5 Flash Lite
 - [Despliegue](#-despliegue)
 - [Seguridad](#-seguridad)
 - [Monitoreo](#-monitoreo)
+- [Historial de Cambios](#-historial-de-cambios)
 - [Contribución](#-contribución)
 - [Contacto](#-contacto)
 
@@ -44,12 +46,16 @@ Backend Flask con agente conversacional de IA (LangGraph + Gemini 2.5 Flash Lite
 |---|---|
 | **Agente IA conversacional** | Grafo LangGraph de 8 nodos con router inteligente (fast-path por keywords + fallback Gemini 2.5 Flash Lite) |
 | **Respuestas determinísticas (0 tokens)** | Saludos, 7 categorías de FAQ, despedidas, OK y agradecimientos — costo cero de IA |
-| **Campañas multi-tipo** | Creación y envío de campañas `MATRICULA`, `EVENTO` e `INFO` con tracking individual por estudiante |
+| **Campañas multi-tipo** | Creación y envío de campañas `MATRICULA`, `EVENTO`, `INFO` y `CAPTACION` con tracking individual por estudiante |
 | **Confirmación de matrícula** | Flujo Sí/No con actualización de `estado_academico` (`INSCRITO` → `MATRICULADO`/`RECHAZADO`) |
 | **Confirmación de eventos** | Flujo Asisto/No Asisto independiente del estado académico (solo actualiza `campana_miembros`) |
+| **Captación de interesados** | Campañas de tipo `CAPTACION` con template `mensaje_interesados` para leads |
+| **Catálogo de plantillas INFO** | Sistema extensible con `recordatorio_presencial`, `recordatorio_virtual` y `mensaje_interesados`, cada uno con parámetros definidos |
 | **Consulta de estado** | Respuesta determinística del estado de inscripción: `INSCRITO`, `MATRICULADO`, `RECHAZADO`, `GRADUADO` |
 | **Acceso a plataforma** | Credenciales de talentotech2.com.co/campus basadas en número de cédula |
 | **Envío masivo seguro** | Batch hasta 10,000 estudiantes con `skip_already_sent` para evitar duplicados por tipo de campaña |
+| **Envío incremental** | Modo A (campaña existente) permite agregar estudiantes progresivamente sin crear nuevas campañas |
+| **Resolución dinámica de plantillas** | Cada tipo de campaña resuelve automáticamente su plantilla Meta y `language_code` (ej: `es_CO` para EVENTO) |
 | **Integración Google Drive** | Importación desde Sheets/CSV/XLSX con normalización automática de teléfonos, alias de columnas y concatenación de nombres |
 | **Protección de datos existentes** | En re-upload, los datos originales del estudiante (nombre, documento, email, bootcamp, estado) se preservan — nunca se sobrescriben |
 | **Sincronización bidireccional** | Scheduler APScheduler cada 5 min para sync automático con Drive |
@@ -119,7 +125,7 @@ Backend Flask con agente conversacional de IA (LangGraph + Gemini 2.5 Flash Lite
 ### Flujo de Datos
 
 1. **Importación** → Google Drive → `/api/google/upload` → normalización Pandas → UPSERT en Turso (preserva datos existentes)
-2. **Campañas** → Crear campaña → agregar miembros → enviar → WhatsApp Business API → tracking por estudiante
+2. **Campañas** → Crear campaña (4 tipos) → agregar miembros → enviar → WhatsApp Business API → tracking por estudiante
 3. **Respuesta entrante** → WhatsApp → Webhook → Deduplicación → Agente IA (grafo LangGraph) → respuesta + actualización BD
 4. **Visualización** → Turso → API REST → Frontend React (Vercel)
 5. **Sincronización** → APScheduler cada 5 min → Turso ↔ Google Drive
@@ -314,7 +320,7 @@ CREATE TABLE IF NOT EXISTS campanas (
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
 | `nombre` | TEXT NOT NULL | Nombre de la campaña |
-| `tipo` | TEXT NOT NULL | `MATRICULA` / `EVENTO` / `INFO` |
+| `tipo` | TEXT NOT NULL | `MATRICULA` / `EVENTO` / `INFO` / `CAPTACION` |
 | `bootcamp_objetivo_id` | INTEGER FK | Filtro opcional por bootcamp |
 | `plantilla_whatsapp` | TEXT | Nombre del template en Meta Business |
 | `estado` | TEXT | `DRAFT` → `SENDING` → `COMPLETED` |
@@ -365,6 +371,7 @@ CREATE TABLE IF NOT EXISTS campana_miembros (
 | **Estudiantes** | `insert_or_update_estudiante(data)` | UPSERT por `telefono_e164` (preserva datos existentes) |
 | | `get_estudiante_by_phone(telefono)` | Buscar con JOIN a bootcamp |
 | | `get_estudiantes_by_bootcamp(id)` | Filtrar por bootcamp |
+| | `get_estudiantes_by_bootcamp_and_estado(id, estado)` | Filtrar por bootcamp + estado académico |
 | | `get_estudiantes_opt_in()` | Todos los contactables |
 | | `get_estudiantes_sin_campana_enviada(tipo)` | Sin campaña enviada del tipo dado |
 | | `get_all_estudiantes(limit, offset, campana_id)` | Paginado con filtro opcional |
@@ -408,6 +415,42 @@ Cuando se cargan estudiantes que ya existen en la base de datos (mismo `telefono
 
 ---
 
+## 📨 Sistema de Campañas Multi-Tipo
+
+El backend soporta 4 tipos de campaña, cada uno con su plantilla Meta WhatsApp, parámetros y `language_code` específico:
+
+### Tipos de Campaña y Plantillas
+
+| Tipo | Plantilla por defecto | Language Code | Parámetros | Descripción |
+|---|---|---|---|---|
+| `MATRICULA` | `prueba_matricula` | `es` | nombre, modalidad, bootcamp_nombre, fecha_inicio_ingles, fecha_fin_ingles, fecha_inicio_tecnica, horario, lugar | Confirmación de matrícula con flujo Sí/No |
+| `EVENTO` | `confirmacion_evento_quindio` | `es_CO` | nombre | Confirmación de asistencia Asisto/No Asisto |
+| `INFO` | `recordatorio_presencial` | `es` | (según catálogo) | Recordatorios y anuncios informativos |
+| `CAPTACION` | `mensaje_interesados` | `es` | nombre | Captación de leads / interesados |
+
+### Catálogo de Plantillas INFO
+
+| Plantilla | Parámetros | Uso |
+|---|---|---|
+| `recordatorio_presencial` | nombre, bootcamp_nombre, fecha_inicio_tecnica, horario, lugar | Recordatorio inicio bootcamp presencial |
+| `recordatorio_virtual` | nombre, bootcamp_nombre, fecha_inicio_tecnica, horario, link_plataforma | Recordatorio inicio bootcamp virtual |
+| `mensaje_interesados` | nombre | Mensaje para captación de interesados |
+
+### Flujo de Envío Masivo (send-batch)
+
+El endpoint `send-batch` opera en 8 pasos atómicos:
+
+1. **Resolver campaña** — Modo A (existente) o Modo B (crear nueva)
+2. **Filtrar duplicados** — `skip_already_sent` excluye estudiantes ya enviados en campaña del mismo tipo
+3. **Crear campaña** — Solo modo B, si todos fueron filtrados no se crea
+4. **Agregar miembros** — INSERT OR IGNORE (duplicados se ignoran)
+5. **Validar pendientes** — Verifica que haya miembros sin enviar
+6. **Resolver plantilla** — Determina template y `language_code` por tipo
+7. **Obtener pendientes** — Solo miembros con `estado_envio = 'pending'`
+8. **Enviar mensajes** — Secuencial con `DELAY_SECONDS` entre cada envío
+
+---
+
 ## 📦 Requisitos Previos
 
 - **Python** 3.10 o superior
@@ -445,7 +488,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Dependencias (13 paquetes principales)
+### Dependencias (14 paquetes principales)
 
 | Grupo | Paquetes |
 |---|---|
@@ -454,7 +497,8 @@ pip install -r requirements.txt
 | APIs Externas | `requests>=2.31.0`, `python-dotenv>=1.0.0` |
 | Procesamiento | `pandas>=2.0.0`, `openpyxl>=3.1.0` |
 | Scheduler | `APScheduler>=3.10.0` |
-| Agente IA | `langgraph>=0.2.0`, `langchain-google-genai>=2.0.0`, `langchain-core>=0.3.0` |
+| Agente IA | `langgraph>=0.2.0`, `langgraph-cli>=0.1.0`, `langchain-google-genai>=2.0.0`, `langchain-core>=0.3.0` |
+| Testing | `pytest>=7.0.0` |
 
 ### 4. Configurar Variables de Entorno
 
@@ -589,22 +633,26 @@ Respuesta exitosa:
 |---|---|---|
 | POST | `/api/messages/send-simple` | Envía mensaje de texto o plantilla individual |
 | POST | `/api/messages/send-template` | Alias de send-simple (compatibilidad legacy) |
-| POST | `/api/messages/send-batch` | Envío masivo seguro (max 10,000 por llamada, `skip_already_sent` para evitar duplicados) |
+| POST | `/api/messages/send-batch` | Envío masivo seguro con soporte multi-tipo (MATRICULA/EVENTO/INFO/CAPTACION), `skip_already_sent`, envío incremental |
 
-**`send-batch` Body (JSON):**
+**`send-batch` Body — Modo A (Campaña existente):**
 ```json
 {
-  "campana_id": 1,                    // Modo A: campaña existente
-  "estudiante_ids": [1, 2, 3],       // IDs de estudiantes a enviar
-  "skip_already_sent": true           // Omite estudiantes con campaña del mismo tipo ya enviada
+  "campana_id": 1,
+  "estudiante_ids": [1, 2, 3],
+  "skip_already_sent": true,
+  "plantilla_whatsapp": "confirmacion_evento_quindio"
 }
 ```
-O para crear campaña nueva:
+
+**`send-batch` Body — Modo B (Crear campaña nueva):**
 ```json
 {
-  "campana_nombre": "Matrícula 2026",  // Modo B: crea campaña
-  "tipo": "MATRICULA",
-  "estudiante_ids": [1, 2, 3]
+  "campana_nombre": "Evento Quindío 2026",
+  "tipo": "EVENTO",
+  "estudiante_ids": [1, 2, 3],
+  "plantilla_whatsapp": "confirmacion_evento_quindio",
+  "skip_already_sent": true
 }
 ```
 
@@ -641,17 +689,17 @@ O para crear campaña nueva:
 | POST | `/api/campaigns` | Crear campaña (`nombre`, `tipo`, `plantilla_whatsapp`, `bootcamp_objetivo_id`) |
 | GET | `/api/campaigns` | Listar todas las campañas |
 | GET | `/api/campaigns/<id>` | Obtener campaña con estadísticas detalladas |
-| GET | `/api/campaigns/templates` | Plantillas por defecto por tipo (`MATRICULA`/`EVENTO`/`INFO`) |
-| POST | `/api/campaigns/<id>/members` | Agregar miembros (3 modos: por IDs, por bootcamp, o `all_opt_in`) |
+| GET | `/api/campaigns/templates` | Plantillas por defecto por tipo (MATRICULA/EVENTO/INFO/CAPTACION) + catálogo INFO |
+| POST | `/api/campaigns/<id>/members` | Agregar miembros (3 modos: por IDs, por bootcamp, o `all_opt_in` con filtro inteligente) |
 | POST | `/api/campaigns/<id>/send` | Enviar campaña a todos los miembros pendientes |
-| GET | `/api/campaigns/<id>/stats` | Estadísticas: total, pendientes, enviados, respondidos |
+| GET | `/api/campaigns/<id>/stats` | Estadísticas: total, pendientes, enviados, respondidos, tasa de respuesta, desglose |
 | DELETE | `/api/campaigns/<id>` | Eliminar campaña + todos sus miembros |
 
 ### Google Drive
 
 | Método | Endpoint | Descripción |
 |---|---|---|
-| POST | `/api/google/upload` | Procesar archivo de Drive → normalizar → guardar en BD (preserva datos existentes) |
+| POST | `/api/google/upload` | Procesar archivo de Drive → normalizar → guardar en BD (preserva datos existentes, auto-detecta columnas) |
 | POST | `/api/sync/drive-manual` | Forzar sincronización manual con Drive |
 
 > Documentación detallada de cada endpoint con ejemplos de request/response en [docs/API_DOCUMENTATION.md](./docs/API_DOCUMENTATION.md)
@@ -713,7 +761,7 @@ filterwarnings =
 Agent_T_T/
 │
 ├── run.py                          # Punto de entrada (desarrollo): carga .env, inicia Flask
-├── requirements.txt                # 13 dependencias principales
+├── requirements.txt                # 14 dependencias principales
 ├── langgraph.json                  # Config LangGraph → app/agent/graph.py:get_agent
 ├── pytest.ini                      # Configuración de pytest
 ├── .env                            # Variables de entorno (NO versionado)
@@ -735,21 +783,21 @@ Agent_T_T/
 │   │       ├── status.py           # Estado de matrícula (determinístico, 0 tokens)
 │   │       ├── platform.py         # Credenciales plataforma educativa
 │   │       ├── confirm.py          # Confirmación Sí/No → MATRICULADO/RECHAZADO
-│   │       ├── confirm_event.py    # Confirmación Asisto/No → ASISTE/NO_ASISTE
-│   │       ├── quick_response.py   # 11+ respuestas pre-definidas (saludos, FAQ, OK, etc.)
+│   │       ├── confirm_event.py    # Confirmación Asisto/No → ASISTE/NO_ASISTE (solo campana_miembros)
+│   │       ├── quick_response.py   # 11+ respuestas pre-definidas (saludos, 7 FAQ, OK, etc.)
 │   │       └── fallback.py         # FAQ con Gemini 2.5 Flash Lite (temp=0.3)
 │   │
 │   ├── controllers/                # CAPA HTTP — 7 Blueprints Flask
 │   │   ├── system_controller.py    # /, /health, /privacy, /api/database/reset
 │   │   ├── webhook_controller.py   # GET/POST /webhook (WhatsApp Cloud API)
-│   │   ├── message_controller.py   # /api/messages/send-simple, send-batch, send-template
+│   │   ├── message_controller.py   # /api/messages/send-simple, send-batch (multi-tipo), send-template
 │   │   ├── student_controller.py   # /api/estudiantes/*, /api/contacts/*, /api/estadisticas
 │   │   ├── bootcamp_controller.py  # /api/bootcamps/*
-│   │   ├── campaign_controller.py  # /api/campaigns/* (CRUD + envío + stats)
+│   │   ├── campaign_controller.py  # /api/campaigns/* (CRUD + envío + stats + templates + catálogo INFO)
 │   │   └── drive_controller.py     # /api/google/upload, /api/sync/drive-manual
 │   │
 │   ├── services/                   # CAPA DE NEGOCIO
-│   │   ├── whatsapp_service.py     # Cliente Meta Graph API v22.0 (texto + templates)
+│   │   ├── whatsapp_service.py     # Cliente Meta Graph API v22.0 (texto + templates, soporte header params)
 │   │   ├── db_handler.py           # CRUD Turso (HTTP Pipeline) / SQLite (600+ líneas)
 │   │   ├── google_drive_service.py # Download/parse/update Drive (v3) + Sheets (v4)
 │   │   └── sync_service.py         # APScheduler BackgroundScheduler (5 min)
@@ -861,6 +909,8 @@ docker run -p 5000:5000 --env-file .env agent-tt
 | `[DRIVE]` | Operaciones con Google Drive (upload/sync) |
 | `[SYNC]` | Sincronización automática (APScheduler) |
 | `[GEMINI]` | Uso de tokens por llamada a Gemini (input/output/total) |
+| `[BATCH]` | Flujo send-batch: pasos, filtrado, envío, estadísticas |
+| `[CAMPAIGN]` | Operaciones CRUD de campañas |
 
 ### Ejemplo de Logs
 
@@ -875,7 +925,58 @@ docker run -p 5000:5000 --env-file .env agent-tt
 [ROUTER] Prioridad 0: Campaña MATRICULA activa → CONFIRM
 [CONFIRM] Estudiante confirmó matrícula → estado_academico=MATRICULADO
 [BG] ✅ Respuesta enviada a 573009876543
+
+[BATCH] Campaña nueva: #5 'Evento Quindío 2026' tipo=EVENTO, estudiantes=120
+[BATCH] skip_already_sent: 120 originales → 95 elegibles, 25 omitidos
+[BATCH] [1/95] → 573001111111
+[CAMPAIGN] Enviando campaña 5 (confirmacion_evento_quindio) a 95 miembros
 ```
+
+---
+
+## 📝 Historial de Cambios
+
+### v2.0.0 → v2.1.0 — Sistema de Campañas Multi-Tipo (Marzo–Abril 2026)
+
+**Campañas de Evento y Captación:**
+- Nuevo tipo de campaña `EVENTO` con flujo Asisto/No Asisto independiente del estado académico
+- Nuevo tipo de campaña `CAPTACION` con template `mensaje_interesados` para leads
+- Nodo `confirm_event` en el grafo LangGraph para manejar respuestas de eventos
+- Resolución dinámica de `language_code` por tipo (`es_CO` para EVENTO, `es` para el resto)
+
+**Catálogo de Plantillas INFO:**
+- Diccionario `INFO_TEMPLATES` extensible con definición de parámetros por plantilla
+- Soporte para `recordatorio_presencial`, `recordatorio_virtual`, `mensaje_interesados`
+- Builder inteligente `_build_template_params()` que resuelve parámetros según tipo y plantilla
+
+**Envío Masivo Mejorado (send-batch):**
+- Flujo de 8 pasos atómicos con logs detallados
+- Modo A (campaña existente) con envío incremental: permite agregar estudiantes sin crear nueva campaña
+- `skip_already_sent` filtra estudiantes que ya recibieron campaña del mismo tipo
+- Override de plantilla vía `plantilla_whatsapp` en el payload
+
+**Mejoras en WhatsApp Service:**
+- Soporte `has_header_param` para plantillas con parámetros en header
+- Logs de debug detallados para payload/response (diagnóstico de errores Meta)
+- Resolución de `language_code` desde `TEMPLATE_DEFAULTS` (prioridad sobre frontend)
+
+**Investigación y Gestión de WhatsApp Business API:**
+- Investigación sobre políticas de mensajería de Meta tras bloqueo por "tráfico inusual"
+- Redacción de correo para verificación de negocio (Business Verification) ante Meta
+- Estrategia de uso de múltiples cuentas de Meta Business como contingencia
+- Implementación de pausas estratégicas (`DELAY_SECONDS`) para rate limiting
+
+**DB Handler:**
+- Nuevo método `get_estudiantes_by_bootcamp_and_estado()` para filtro combinado
+- Endpoint `/api/campaigns/templates` retorna catálogo completo con plantillas INFO
+
+### v1.0.0 → v2.0.0 — Arquitectura MVC + Agente IA (Febrero 2026)
+
+- Refactorización completa a MVC con 7 Blueprints
+- Integración LangGraph + Gemini 2.5 Flash Lite
+- Sistema de campañas con 4 tablas normalizadas
+- 173+ tests automatizados
+- Deploy en Render + Turso
 
 ---
 
@@ -914,3 +1015,7 @@ Este proyecto fue desarrollado para el programa **Talento Tech** del Ministerio 
 | **Repositorio** | [github.com/JuanGonzalezx/Agent_T_T](https://github.com/JuanGonzalezx/Agent_T_T) |
 | **API Producción** | [agent-t-t.onrender.com](https://agent-t-t.onrender.com) |
 | **Frontend** | [panel-agent-tt.vercel.app](https://panel-agent-tt.vercel.app) |
+
+---
+
+*Documentación actualizada — Abril 2026*
