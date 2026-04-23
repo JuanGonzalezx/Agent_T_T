@@ -138,10 +138,19 @@ def router(state: AgentState):
         return {"intent": "GRACIAS"}
     
     # CONFIRMACIONES SIMPLES - respuesta determinística
-    ok_keywords = ['ok', 'listo', 'perfecto', 'entendido', 'vale', 'genial', 'excelente']
-    if last_msg in ok_keywords or (len(last_msg) < 15 and any(k in last_msg for k in ok_keywords)):
+    ok_keywords = ['ok', 'listo', 'perfecto', 'entendido', 'vale', 'genial', 'excelente',
+                   'dale', 'ya', 'si', 'sí', 'claro', 'bueno', 'va', 'oki',
+                   'sale', 'de acuerdo', 'está bien', 'esta bien', 'okey', 'okay']
+    if last_msg in ok_keywords or (len(last_msg) < 20 and any(k == last_msg.strip() for k in ok_keywords)):
         logger.info("[ROUTER] Fast-Path: OK (sin IA)")
         return {"intent": "OK"}
+    
+    # CONFUSIÓN / MENSAJES VACÍOS - respuesta amigable
+    confused_patterns = ['?', '??', '???', 'que', 'qué', 'como', 'cómo', 'no entiendo',
+                         'no entendi', 'no sé', 'no se', 'eh', 'mm', 'hmm']
+    if last_msg in confused_patterns or (len(last_msg) < 5 and '?' in last_msg):
+        logger.info("[ROUTER] Fast-Path: CONFUSED (sin IA)")
+        return {"intent": "CONFUSED"}
     
     # DESPEDIDAS - respuesta determinística
     despedidas = ['chao', 'adiós', 'adios', 'bye', 'hasta luego', 'nos vemos']
@@ -238,7 +247,7 @@ def decide_next_node(state: AgentState):
     if intent == 'CITA': return "citas"
     
     # Respuestas determinísticas (sin IA) - COSTO 0 TOKENS
-    quick_intents = ('SALUDO', 'GRACIAS', 'OK', 'DESPEDIDA', 
+    quick_intents = ('SALUDO', 'GRACIAS', 'OK', 'DESPEDIDA', 'CONFUSED',
                      'INFO_TALENTO', 'INFO_INSCRIPCION', 'INFO_BOOTCAMPS',
                      'INFO_HORARIO', 'INFO_CERTIFICADO', 'INFO_COSTO', 'INFO_CONTACTO')
     if intent in quick_intents:

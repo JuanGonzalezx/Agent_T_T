@@ -42,8 +42,19 @@ def quick_response_node(state: AgentState):
         ),
         
         "OK": (
-            "Perfecto 👍\n"
-            "Si tienes otra consulta, aquí estaré."
+            f"Perfecto{saludo_nombre} 👍\n"
+            "Si tienes otra consulta, aquí estaré.\n\n"
+            "Puedes escribirme:\n"
+            "📋 *estado* · 🔑 *acceso* · 📅 *cita*"
+        ),
+        
+        "CONFUSED": (
+            f"¿En qué puedo ayudarte{saludo_nombre}? 🤔\n\n"
+            "Estos son los temas en los que puedo asistirte:\n\n"
+            "📋 *estado* → Consultar tu matrícula\n"
+            "🔑 *acceso* → Credenciales de la plataforma\n"
+            "📅 *cita* → Agendar una cita\n"
+            "❓ También puedo responder sobre horarios, inscripción y costos."
         ),
         
         "DESPEDIDA": (
