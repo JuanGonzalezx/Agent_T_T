@@ -32,6 +32,7 @@ def quick_response_node(state: AgentState):
             "¿En qué puedo ayudarte?\n\n"
             "📋 *estado* → Consultar tu matrícula\n"
             "🔑 *acceso* → Credenciales de la plataforma\n"
+            "📅 *cita* → Agendar una cita\n"
             "❓ También puedo responder preguntas sobre horarios, inscripción y certificación."
         ),
         

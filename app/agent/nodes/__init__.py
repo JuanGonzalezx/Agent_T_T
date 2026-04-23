@@ -5,6 +5,7 @@ from .confirm import confirm_response_node
 from .confirm_event import confirm_event_node
 from .fallback import llm_fallback_node
 from .quick_response import quick_response_node
+from .citas import citas_node
 
 __all__ = [
     "load_context_node",
@@ -13,5 +14,6 @@ __all__ = [
     "confirm_response_node",
     "confirm_event_node",
     "llm_fallback_node",
-    "quick_response_node"
+    "quick_response_node",
+    "citas_node"
 ]

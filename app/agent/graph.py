@@ -13,7 +13,8 @@ from app.agent.nodes import (
     confirm_response_node,
     confirm_event_node,
     llm_fallback_node,
-    quick_response_node
+    quick_response_node,
+    citas_node
 )
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,14 @@ def router(state: AgentState):
     if any(kw in last_msg for kw in info_contacto):
         logger.info("[ROUTER] Fast-Path: INFO_CONTACTO (sin IA)")
         return {"intent": "INFO_CONTACTO"}
+    
+    # CITAS - módulo de agendamiento (sin IA)
+    cita_keywords = ['cita', 'agendar', 'agendar cita', 'cancelar cita', 'estado cita',
+                     'mi cita', 'bienestar', 'psicolog', 'reunión', 'reunion',
+                     'solicitar cita', 'pedir cita', 'reservar cita']
+    if any(kw in last_msg for kw in cita_keywords):
+        logger.info("[ROUTER] Fast-Path: CITA (sin IA)")
+        return {"intent": "CITA"}
 
     # ==========================================================
     # 🧠 SOLO para consultas MUY ESPECÍFICAS: Usamos Gemini
@@ -204,6 +213,7 @@ def decide_next_node(state: AgentState):
     if intent == 'CONFIRM': return "confirm_response"
     if intent == 'STATUS': return "check_status"
     if intent == 'ACCESS': return "platform_access"
+    if intent == 'CITA': return "citas"
     
     # Respuestas determinísticas (sin IA) - COSTO 0 TOKENS
     quick_intents = ('SALUDO', 'GRACIAS', 'OK', 'DESPEDIDA', 
@@ -227,6 +237,7 @@ def build_agent_graph():
     workflow.add_node("platform_access", platform_access_node)
     workflow.add_node("quick_response", quick_response_node)  # Sin IA
     workflow.add_node("general_response", llm_fallback_node)   # Con IA
+    workflow.add_node("citas", citas_node)                     # Citas (sin IA)
     
     workflow.set_entry_point("load_context")
     workflow.add_edge("load_context", "router_gemini")
@@ -240,7 +251,8 @@ def build_agent_graph():
             "check_status": "check_status",
             "platform_access": "platform_access",
             "quick_response": "quick_response",
-            "general_response": "general_response"
+            "general_response": "general_response",
+            "citas": "citas"
         }
     )
     
@@ -250,6 +262,7 @@ def build_agent_graph():
     workflow.add_edge("platform_access", END)
     workflow.add_edge("quick_response", END)
     workflow.add_edge("general_response", END)
+    workflow.add_edge("citas", END)
     
     return workflow.compile()
 

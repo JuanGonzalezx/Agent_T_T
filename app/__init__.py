@@ -84,6 +84,7 @@ def create_app():
     from app.controllers.student_controller import student_bp
     from app.controllers.bootcamp_controller import bootcamp_bp
     from app.controllers.campaign_controller import campaign_bp
+    from app.controllers.cita_controller import cita_bp
 
     app.register_blueprint(system_bp)
     app.register_blueprint(webhook_bp)
@@ -92,6 +93,7 @@ def create_app():
     app.register_blueprint(student_bp, url_prefix='/api') # Incluye /estudiantes y /contacts
     app.register_blueprint(bootcamp_bp, url_prefix='/api/bootcamps')
     app.register_blueprint(campaign_bp, url_prefix='/api/campaigns')
+    app.register_blueprint(cita_bp, url_prefix='/api/citas')
 
     # Manejadores de Error Globales
     @app.errorhandler(404)

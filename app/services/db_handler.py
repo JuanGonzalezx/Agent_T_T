@@ -280,6 +280,42 @@ class DatabaseHandler:
             'CREATE INDEX IF NOT EXISTS idx_cm_campana ON campana_miembros(campana_id)',
             'CREATE INDEX IF NOT EXISTS idx_cm_estudiante ON campana_miembros(estudiante_id)',
             'CREATE INDEX IF NOT EXISTS idx_cm_estado ON campana_miembros(estado_envio)',
+
+            # ─── horarios_disponibles (módulo citas) ───
+            '''CREATE TABLE IF NOT EXISTS horarios_disponibles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dia_semana INTEGER NOT NULL,
+                hora_inicio TEXT NOT NULL,
+                hora_fin TEXT NOT NULL,
+                duracion_minutos INTEGER DEFAULT 30,
+                max_citas_simultaneas INTEGER DEFAULT 1,
+                activo INTEGER DEFAULT 1,
+                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''',
+
+            # ─── citas ───
+            '''CREATE TABLE IF NOT EXISTS citas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                estudiante_id INTEGER,
+                telefono_e164 TEXT NOT NULL,
+                nombre TEXT NOT NULL,
+                descripcion TEXT,
+                fecha_cita TEXT NOT NULL,
+                hora_cita TEXT NOT NULL,
+                duracion_minutos INTEGER DEFAULT 30,
+                estado TEXT DEFAULT 'PENDIENTE',
+                motivo_rechazo TEXT,
+                notas_internas TEXT,
+                fecha_solicitud TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(estudiante_id) REFERENCES estudiantes(id)
+            )''',
+
+            # ─── índices citas ───
+            'CREATE INDEX IF NOT EXISTS idx_citas_estado ON citas(estado)',
+            'CREATE INDEX IF NOT EXISTS idx_citas_telefono ON citas(telefono_e164)',
+            'CREATE INDEX IF NOT EXISTS idx_citas_fecha ON citas(fecha_cita)',
+            'CREATE INDEX IF NOT EXISTS idx_horarios_dia ON horarios_disponibles(dia_semana)',
         ]
 
         # Migraciones: agregar columnas nuevas a tablas existentes
@@ -1323,3 +1359,211 @@ class DatabaseHandler:
                 return False, f"Errores: {'; '.join(errors)}"
         except Exception as e:
             return False, f"Error reseteando base de datos: {str(e)}"
+
+    # =================================================================
+    # HORARIOS DISPONIBLES (Módulo Citas)
+    # =================================================================
+
+    def insert_horario_disponible(self, dia_semana: int, hora_inicio: str,
+                                   hora_fin: str, duracion_minutos: int = 30,
+                                   max_citas: int = 1) -> Tuple[bool, Any]:
+        """Inserta un nuevo horario disponible para citas."""
+        try:
+            last_id = self._execute_insert(
+                '''INSERT INTO horarios_disponibles
+                   (dia_semana, hora_inicio, hora_fin, duracion_minutos, max_citas_simultaneas)
+                   VALUES (?, ?, ?, ?, ?)''',
+                (dia_semana, hora_inicio, hora_fin, duracion_minutos, max_citas)
+            )
+            return True, last_id
+        except Exception as e:
+            return False, f"Error al crear horario: {str(e)}"
+
+    def get_horarios_disponibles(self, solo_activos: bool = False) -> List[Dict[str, Any]]:
+        """Obtiene los horarios configurados."""
+        try:
+            if solo_activos:
+                return self._execute_query(
+                    "SELECT * FROM horarios_disponibles WHERE activo = 1 ORDER BY dia_semana, hora_inicio",
+                    fetch_all=True
+                ) or []
+            return self._execute_query(
+                "SELECT * FROM horarios_disponibles ORDER BY dia_semana, hora_inicio",
+                fetch_all=True
+            ) or []
+        except Exception as e:
+            print(f"Error obteniendo horarios: {str(e)}")
+            return []
+
+    def toggle_horario(self, horario_id: int) -> Tuple[bool, str]:
+        """Activa/desactiva un horario."""
+        try:
+            horario = self._execute_query(
+                "SELECT activo FROM horarios_disponibles WHERE id = ?",
+                (horario_id,), fetch_one=True
+            )
+            if not horario:
+                return False, "Horario no encontrado"
+            
+            new_val = 0 if int(horario.get('activo', 0)) else 1
+            self._execute_query(
+                "UPDATE horarios_disponibles SET activo = ? WHERE id = ?",
+                (new_val, horario_id)
+            )
+            estado = "activado" if new_val else "desactivado"
+            return True, f"Horario {estado}"
+        except Exception as e:
+            return False, f"Error: {str(e)}"
+
+    def delete_horario(self, horario_id: int) -> Tuple[bool, str]:
+        """Elimina un horario disponible."""
+        try:
+            self._execute_query(
+                "DELETE FROM horarios_disponibles WHERE id = ?",
+                (horario_id,)
+            )
+            return True, "Horario eliminado"
+        except Exception as e:
+            return False, f"Error: {str(e)}"
+
+    # =================================================================
+    # CITAS
+    # =================================================================
+
+    def insert_cita(self, estudiante_id: Optional[int], telefono: str,
+                    nombre: str, descripcion: str, fecha_cita: str,
+                    hora_cita: str, duracion: int = 30) -> Tuple[bool, Any]:
+        """Crea una nueva cita con estado PENDIENTE."""
+        try:
+            last_id = self._execute_insert(
+                '''INSERT INTO citas
+                   (estudiante_id, telefono_e164, nombre, descripcion,
+                    fecha_cita, hora_cita, duracion_minutos, estado)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDIENTE')''',
+                (estudiante_id, telefono, nombre, descripcion,
+                 fecha_cita, hora_cita, duracion)
+            )
+            return True, last_id
+        except Exception as e:
+            return False, f"Error al crear cita: {str(e)}"
+
+    def get_cita_by_id(self, cita_id: int) -> Optional[Dict[str, Any]]:
+        """Obtiene una cita por su ID."""
+        try:
+            return self._execute_query(
+                "SELECT * FROM citas WHERE id = ?",
+                (cita_id,), fetch_one=True
+            )
+        except Exception as e:
+            print(f"Error obteniendo cita: {str(e)}")
+            return None
+
+    def get_all_citas(self) -> List[Dict[str, Any]]:
+        """Obtiene todas las citas ordenadas por fecha de solicitud (más recientes primero)."""
+        try:
+            return self._execute_query(
+                "SELECT * FROM citas ORDER BY fecha_solicitud DESC",
+                fetch_all=True
+            ) or []
+        except Exception as e:
+            print(f"Error obteniendo citas: {str(e)}")
+            return []
+
+    def get_citas_by_estado(self, estado: str) -> List[Dict[str, Any]]:
+        """Obtiene citas filtradas por estado."""
+        try:
+            return self._execute_query(
+                "SELECT * FROM citas WHERE estado = ? ORDER BY fecha_solicitud DESC",
+                (estado.upper(),), fetch_all=True
+            ) or []
+        except Exception as e:
+            print(f"Error obteniendo citas: {str(e)}")
+            return []
+
+    def get_citas_by_phone(self, telefono: str) -> List[Dict[str, Any]]:
+        """Obtiene las citas de un estudiante por teléfono."""
+        try:
+            telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+            return self._execute_query(
+                '''SELECT * FROM citas
+                   WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+                   ORDER BY fecha_solicitud DESC''',
+                (telefono_clean,), fetch_all=True
+            ) or []
+        except Exception as e:
+            print(f"Error obteniendo citas: {str(e)}")
+            return []
+
+    def get_cita_pendiente_by_phone(self, telefono: str) -> Optional[Dict[str, Any]]:
+        """Obtiene la cita pendiente o confirmada más reciente de un estudiante."""
+        try:
+            telefono_clean = telefono.replace('+', '').replace(' ', '').replace('-', '')
+            return self._execute_query(
+                '''SELECT * FROM citas
+                   WHERE REPLACE(REPLACE(REPLACE(telefono_e164, '+', ''), ' ', ''), '-', '') = ?
+                     AND estado IN ('PENDIENTE', 'CONFIRMADA')
+                   ORDER BY fecha_solicitud DESC
+                   LIMIT 1''',
+                (telefono_clean,), fetch_one=True
+            )
+        except Exception as e:
+            print(f"Error obteniendo cita pendiente: {str(e)}")
+            return None
+
+    def update_cita_estado(self, cita_id: int, estado: str,
+                           motivo_rechazo: str = None,
+                           notas_internas: str = None) -> Tuple[bool, str]:
+        """Actualiza el estado de una cita."""
+        try:
+            now = datetime.now().isoformat()
+            if motivo_rechazo:
+                self._execute_query(
+                    '''UPDATE citas SET estado = ?, motivo_rechazo = ?,
+                       fecha_actualizacion = ? WHERE id = ?''',
+                    (estado, motivo_rechazo, now, cita_id)
+                )
+            elif notas_internas:
+                self._execute_query(
+                    '''UPDATE citas SET estado = ?, notas_internas = ?,
+                       fecha_actualizacion = ? WHERE id = ?''',
+                    (estado, notas_internas, now, cita_id)
+                )
+            else:
+                self._execute_query(
+                    '''UPDATE citas SET estado = ?,
+                       fecha_actualizacion = ? WHERE id = ?''',
+                    (estado, now, cita_id)
+                )
+            return True, f"Cita actualizada a {estado}"
+        except Exception as e:
+            return False, f"Error: {str(e)}"
+
+    def cancelar_cita(self, cita_id: int) -> Tuple[bool, str]:
+        """Cancela una cita (cambia estado a CANCELADA)."""
+        return self.update_cita_estado(cita_id, 'CANCELADA')
+
+    def get_citas_stats(self) -> Dict[str, Any]:
+        """Estadísticas generales de citas."""
+        try:
+            def get_count(query, params=None):
+                result = self._execute_query(query, params, fetch_one=True)
+                if not result:
+                    return 0
+                val = list(result.values())[0]
+                if isinstance(val, dict):
+                    return int(val.get('value', 0))
+                return int(val) if val else 0
+
+            return {
+                'total': get_count("SELECT COUNT(*) as c FROM citas"),
+                'pendientes': get_count("SELECT COUNT(*) as c FROM citas WHERE estado = 'PENDIENTE'"),
+                'confirmadas': get_count("SELECT COUNT(*) as c FROM citas WHERE estado = 'CONFIRMADA'"),
+                'rechazadas': get_count("SELECT COUNT(*) as c FROM citas WHERE estado = 'RECHAZADA'"),
+                'canceladas': get_count("SELECT COUNT(*) as c FROM citas WHERE estado = 'CANCELADA'"),
+                'completadas': get_count("SELECT COUNT(*) as c FROM citas WHERE estado = 'COMPLETADA'"),
+            }
+        except Exception as e:
+            print(f"Error obteniendo stats de citas: {str(e)}")
+            return {'total': 0, 'pendientes': 0, 'confirmadas': 0,
+                    'rechazadas': 0, 'canceladas': 0, 'completadas': 0}
+
